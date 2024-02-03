@@ -1,6 +1,7 @@
 import random
 import pickle
 from collections import Counter
+from transformers import AutoTokenizer
 from itertools import chain
 
 class TokenInfo():
@@ -15,6 +16,7 @@ class TokenInfo():
             self.token_row_map = pickle.load(f)
 
         self.token_counts = Counter(list(chain(*self.dataset_tokenized)))
+        self.tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-1_5", trust_remote_code=True)
   
         print('...Loading complete...')
     
@@ -32,12 +34,14 @@ class TokenInfo():
         return out
 
     def top_n(self, n):
-        return self.token_counts.most_common(n)
+        top_tokens =  self.token_counts.most_common(n)
+        return [(x[0], self.tokenizer.decode(x[0]), x[1]) for x in top_tokens]
 
 
 if __name__ == '__main__':
     token_info = TokenInfo()
-    prefix_test = token_info.get_prefixes('dog', 10, 5)
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-1_5", trust_remote_code=True)
+    prefix_test = token_info.get_prefixes(tokenizer.encode('dog')[0], 10, 5)
     top_tokens = token_info.top_n(100)
 
     print(prefix_test)

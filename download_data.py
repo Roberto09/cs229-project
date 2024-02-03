@@ -8,7 +8,7 @@ if __name__ == '__main__':
     tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-1_5", trust_remote_code=True)
 
     num_rows = dataset['train'].num_rows
-    dataset_tokenized = [tokenizer.tokenize(dataset['train'][i]['text']) for i in range(num_rows)]
+    dataset_tokenized = [tokenizer.encode(dataset['train'][i]['text']) for i in range(num_rows)]
 
     token_row_map = defaultdict(set)
 
