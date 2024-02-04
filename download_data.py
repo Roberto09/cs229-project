@@ -3,8 +3,8 @@ from transformers import AutoTokenizer
 from collections import defaultdict
 import pickle
 
-if __name__ == '__main__':
-    dataset = load_dataset("nampdn-ai/tiny-textbooks")
+def fetch_data(data="nampdn-ai/tiny-textbooks"):
+    dataset = load_dataset(data)
     tokenizer = AutoTokenizer.from_pretrained("microsoft/phi-1_5", trust_remote_code=True)
 
     num_rows = dataset['train'].num_rows
