@@ -85,6 +85,12 @@ def evaluate_on_nlp_tasks(
     return res
 
 def evaluate_checkpoint(base_model, checkpoint, tokenizer, tasks=None):
+    """
+    base_model: model after pruning/before posttraining
+    checkpoint: path to training checkpoint with lora weights
+    tokenizer: tokenizer for model
+    tasks: list of evaluation tasks, default uses global TASKS
+    """
     model = PeftModel.from_pretrained(base_model, checkpoint)
     return evaluate_on_nlp_tasks(model, tokenizer, tasks=tasks)
 
