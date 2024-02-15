@@ -17,8 +17,8 @@ $ pip install -e .
 # default tasks
 TASKS = [
     # common sense reasoning
-    "winogrande", # https://huggingface.co/datasets/winogrande
-    "boolq", # https://huggingface.co/datasets/google/boolq
+    #"winogrande", # https://huggingface.co/datasets/winogrande
+    #"boolq", # https://huggingface.co/datasets/google/boolq
     
     # language understanding and knowledge
     "piqa", # https://huggingface.co/datasets/piqa
@@ -53,7 +53,7 @@ def evaluate_on_nlp_tasks(
     max_length = 1024, # max context length
     batch_size = 1,
     tasks = None, # use TASKS by default
-    limit = 100, # number of samples to evaluate on
+    limit = None, # if int: number of samples per task, if float < 1: percentage of examples in task(dataset)
     return_samples = False,
     bootstrap_iters = 0, # number of bootrstrap iterations to compute statistics
     verbosity = "ERROR",
@@ -84,13 +84,17 @@ def evaluate_on_nlp_tasks(
     model.train(was_training)
     return res
 
-def evaluate_checkpoint(base_model, checkpoint, tokenizer, tasks=None):
+def evaluate_checkpoint(base_model, checkpoint, tokenizer, tasks=None, limit=None):
     """
     base_model: model after pruning/before posttraining
     checkpoint: path to training checkpoint with lora weights
     tokenizer: tokenizer for model
     tasks: list of evaluation tasks, default uses global TASKS
+    limit:
+        if None: evaluate on entire dataset
+        if int: number of samples per task 
+        if float < 1: percentage of examples in task(dataset)
     """
     model = PeftModel.from_pretrained(base_model, checkpoint)
-    return evaluate_on_nlp_tasks(model, tokenizer, tasks=tasks)
+    return evaluate_on_nlp_tasks(model, tokenizer, tasks=tasks, limit=limit)
 
