@@ -1,0 +1,142 @@
+from sklearn.cluster import KMeans
+import numpy as np
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from collections import Counter
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from collections import Counter
+from sklearn.metrics import silhouette_score
+from matplotlib.colors import ListedColormap
+from sklearn.decomposition import PCA
+
+def compute_clustering(data_dict, k):
+    """ Runs clustering on the given data dict, which is a dictionary
+    of str -> np.array mapping a token to it's importances.
+    """
+    if isinstance(data_dict, dict):
+        vectors = np.array(list(data_dict.values()))
+    else:
+        vectors = data_dict
+    
+    n = vectors.shape[0]
+
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    kmeans.fit(vectors)
+
+    # R^2
+    inertia = kmeans.inertia_
+    inertia_avg = inertia / n
+
+    global_average = vectors.sum(axis=0) / n
+    global_distance_squared_avg = np.sum(((vectors - global_average)**2)) / n
+
+    R2 = 1 - inertia_avg / global_distance_squared_avg
+    
+    # Average importance distribution
+    average_importance_dist = vectors.sum(axis=0) / n
+
+    # Average ordered importance distribution
+    sorted_vectors = np.sort(vectors, axis=1)[:, ::-1]
+    average_ordered_importance_dist = sorted_vectors.sum(axis=0) / n
+
+    return R2, average_importance_dist, kmeans, average_ordered_importance_dist
+
+def plot_elbow(data_dict, k_range):
+    """Plots elbow given datadict."""
+    inertias_normalized = []
+    for k in tqdm(k_range):
+        _, __, kmeans, _ = compute_clustering(data_dict, k)
+        n = len(data_dict)
+        print(n)
+        inertia_normalized = kmeans.inertia_ / n
+        inertias_normalized.append(inertia_normalized)
+        c = Counter(kmeans.labels_)
+        print(f'Cluster distribution:\n {sorted(c.items())}')
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(k_range, inertias_normalized, '-o', label='Normalized Inertia')
+    plt.xlabel('Number of clusters (k)')
+    plt.ylabel('Normalized Inertia')
+    plt.title('Elbow Method For Optimal k')
+    plt.legend()
+    plt.xticks(k_range)
+    plt.grid(True)
+    plt.show()
+
+def permute_vectors(vectors_shuffled):    
+    for i in range(vectors_shuffled.shape[1]):
+        rand_perm = np.random.permutation(np.arange(vectors_shuffled.shape[0]))
+        vectors_shuffled[:,i] = vectors_shuffled[:,i][rand_perm]
+    return vectors_shuffled 
+
+def permutation_test(data_dict, k, n_perm):
+    """Takes every column of the dataset and permute's it's values.
+    Further it returns a list of n_perm R^2 obtained by doing the permutation
+    and running clustering on the permuted datset."""
+    vectors = np.array(list(data_dict.values()))
+    R2s = []
+    for perm in tqdm(range(n_perm)):
+        vectors_shuffled = vectors.copy()
+        vectors_shuffled = permute_vectors(vectors_shuffled)
+        R2, _, kmeans, _ = compute_clustering(vectors_shuffled, k=k)
+        R2s.append((R2, kmeans))
+    return R2s
+
+def clean_data(data_dict, drop=0.05):
+    """ Cleans up datadict by dropping outliers, which are defined
+    as those furthest from the centroid of the datadict.
+    """
+    data = list(data_dict.items())
+    vectors = np.array([d[1] for d in data])
+    dists = ((vectors - vectors.mean(axis=0))**2).sum(axis=1)
+    drop = int(drop * len(vectors))
+    
+    partition = np.argpartition(dists,-drop)
+    keep = partition[:-drop]
+    drop = partition[-drop:]
+    
+    keepers = [data[i] for i in keep]
+    drop = [data[i] for i in drop]
+    return dict(keepers), dict(drop)
+
+def get_groups(data_dict, kmeans):
+    """ Given a datadict and it's kmeans, returns it's groups.
+    """
+    toks = list(data_dict.keys())
+    labels = kmeans.labels_.tolist()
+    groups = {}
+    for tok, label in zip(toks, labels):
+        if label not in groups:
+            groups[label] = []
+        groups[label].append(tok)
+    return groups
+
+def visualize_kmeans(vectors, decomp = PCA, k = 8):
+    """Runs kmeans over the given vectors and provides a 3d visualization."""
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    kmeans_labels = kmeans.fit_predict(vectors)
+    
+    decomp_ = decomp(n_components=3, random_state=42)
+    vec_decomp = decomp_.fit_transform(vectors)
+
+    ax = plt.figure(figsize=(12, 8)).add_subplot(projection='3d')
+    colors = ['blue', 'green', 'red', 'black', 'yellow', 'purple', 'pink', 'brown']
+
+    if k <= 8:
+        scatter = ax.scatter(vec_decomp[:, 0], vec_decomp[:, 1], vec_decomp[:, 2], cmap=ListedColormap(colors[:k]), c=kmeans_labels, s=10)
+        plt.colorbar(scatter, ticks=list(range(k)), label='Cluster')
+    else:
+        scatter = ax.scatter(vec_decomp[:, 0], vec_decomp[:, 1], vec_decomp[:, 2], c=kmeans_labels, s=10)
+    
+    plt.title('K-means Clusters')
+    plt.show()
+
+    silhouette_avg = silhouette_score(vectors, kmeans_labels)
+    print(f'K={k}, Average Silhouette score: {silhouette_avg}\n')
+
+    c = Counter(kmeans_labels)
+    print(f'Cluster distribution:\n {sorted(c.items())}')
+    
+    return kmeans_labels
