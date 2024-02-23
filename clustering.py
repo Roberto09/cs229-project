@@ -10,6 +10,8 @@ from collections import Counter
 from sklearn.metrics import silhouette_score
 from matplotlib.colors import ListedColormap
 from sklearn.decomposition import PCA
+import os
+import pandas as pd
 
 def compute_clustering(data_dict, k):
     """ Runs clustering on the given data dict, which is a dictionary
@@ -140,3 +142,50 @@ def visualize_kmeans(vectors, decomp = PCA, k = 8):
     print(f'Cluster distribution:\n {sorted(c.items())}')
     
     return kmeans_labels
+
+# Get precomputed importances
+def get_importances():
+    vector_dict = {}
+    dir = 'importances_data/importances'
+    for file in os.listdir(dir):
+        partial_vector_dict = pd.read_pickle(os.path.join(dir, file))
+        vector_dict.update(partial_vector_dict)
+
+    n_layers = len(vector_dict[list(vector_dict.keys())[0]])
+    vector_dicts_layers = {i:{k:v[i].numpy() for k,v in vector_dict.items()} for i in range(n_layers)}   
+    
+    return vector_dicts_layers
+
+def cluster_fit_all_layers(K=8):
+    vector_dicts_layers = get_importances()
+    n_layers = len(list(vector_dicts_layers.keys()))
+    
+    clusters_out = {} # layer -> fitted kmeans model
+    preds_out = {i:{} for i in range(n_layers)} # layer -> token_id -> predicted cluster
+    cluster_distributions = {} # layer -> cluster distribution
+    for layer, v in tqdm(vector_dicts_layers.items()):
+        vectors_clean, _ = clean_data(v)
+        vectors_clean_values = np.array(list(vectors_clean.values()))
+        # Maybe do PCA before clustering, however we didn't do that for
+        # feasibility experiment
+        kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
+        kmeans.fit(vectors_clean_values)
+
+        vectors_all_values = np.array(list(v.values()))
+        cluster_preds = kmeans.predict(vectors_all_values)
+        
+        c = Counter(cluster_preds)
+        cluster_distributions[layer] = sorted(c.items())
+
+        for i, k in enumerate(v.keys()):
+            preds_out[layer][k[0]] = cluster_preds[i]
+
+        clusters_out[layer] = kmeans
+    
+    return preds_out, clusters_out, cluster_distributions
+        
+
+if __name__ == '__main__':
+    #vector_dicts_layers = get_importances()
+    preds, clusters_models, cluster_distributions = cluster_fit_all_layers()
+    print()
