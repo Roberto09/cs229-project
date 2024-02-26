@@ -157,7 +157,7 @@ def get_importances():
     
     return vector_dicts_layers
 
-def cluster_fit_all_layers(K=8):
+def cluster_fit_all_layers(K=8, train_ratio = 0.2):
     vector_dicts_layers = get_importances()
     n_layers = len(list(vector_dicts_layers.keys()))
     
@@ -167,10 +167,14 @@ def cluster_fit_all_layers(K=8):
     for layer, v in tqdm(vector_dicts_layers.items()):
         vectors_clean, _ = clean_data(v)
         vectors_clean_values = np.array(list(vectors_clean.values()))
+
+        num_rows = vectors_clean_values.shape[0]
+        idx = np.random.choice(num_rows, int(num_rows * train_ratio), replace=False)
+
         # Maybe do PCA before clustering, however we didn't do that for
-        # feasibility experiment
+        # the feasibility experiment
         kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
-        kmeans.fit(vectors_clean_values)
+        kmeans.fit(vectors_clean_values[idx])
 
         vectors_all_values = np.array(list(v.values()))
         cluster_preds = kmeans.predict(vectors_all_values)
@@ -185,8 +189,8 @@ def cluster_fit_all_layers(K=8):
     
     return preds_out, clusters_out, cluster_distributions
 
-def dump_clusters():
-    preds, clusters_models, _ = cluster_fit_all_layers()
+def dump_clusters(train_ratio=0.2):
+    preds, clusters_models, _ = cluster_fit_all_layers(train_ratio=train_ratio)
     with open('cluster_pkl/clustering_models.pkl', 'wb') as f:
         pickle.dump(clusters_models, f)
     with open('cluster_pkl/clustering_preds.pkl', 'wb') as f:
@@ -195,5 +199,6 @@ def dump_clusters():
 
 if __name__ == '__main__':
     #vector_dicts_layers = get_importances()
-    preds, clusters_models, cluster_distributions = cluster_fit_all_layers()
+    #preds, clusters_models, cluster_distributions = cluster_fit_all_layers()
+    dump_clusters()
     print()

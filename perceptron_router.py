@@ -10,4 +10,3 @@ class PerceptronRouter(nn.Module):
     def forward(self, x):
         # x: (tensor): embedding
         return torch.argmax(self.fc(x), dim=1, keepdim=True) # softmax prediction
-
