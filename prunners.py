@@ -48,7 +48,7 @@ def prune_mlps_holistically(importances, prune_ratio):
     """
 
     # Concatenate all importance tensors
-    concat_imps = torch.cat(list(importances.values()))
+    concat_imps = torch.cat(list(importances.values())).float()
 
     num_prune_cells = int(len(concat_imps) * prune_ratio)
 
@@ -57,7 +57,8 @@ def prune_mlps_holistically(importances, prune_ratio):
     concat_imps[indices_to_replace] = 0
     
     # Make a new dict with indexes with smallest values zeroed out
-    split_size = len(importances.values()[0])
+    split_size = len(list(importances.values())[0])
+
     pruned_tensors = torch.split(concat_imps, split_size)
     pruned_tensor_dict = {key: tensor for key, tensor in zip(importances.keys(), pruned_tensors)}
 
@@ -73,8 +74,8 @@ def prune_mlps_holistically(importances, prune_ratio):
             dtype=dtype
         )
         with torch.no_grad():
-            fc1_pruned.weight.data = torch.clone(fc1.weight[keep_idx])
-            fc1_pruned.bias.data = torch.clone(fc1.bias[keep_idx])
+            fc1_pruned.weight.data = torch.clone(fc1.weight[keep_idx.long()])
+            fc1_pruned.bias.data = torch.clone(fc1.bias[keep_idx.long()])
 
         fc2 = mlp.fc2
         dtype = fc2.weight.dtype
@@ -84,7 +85,7 @@ def prune_mlps_holistically(importances, prune_ratio):
             dtype=dtype
         )
         with torch.no_grad():
-            fc2_pruned.weight.data = torch.clone(fc2.weight[keep_idx])
+            fc2_pruned.weight.data = torch.clone(fc2.weight[keep_idx.long()])
 
         mlp.fc1 = fc1_pruned
         mlp.fc2 = fc2_pruned

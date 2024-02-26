@@ -23,7 +23,7 @@ model = AutoModelForCausalLM.from_pretrained(
     # attn_implementation="flash_attention_2",
 )
 
-def get_importances():
+"""def get_importances():
     print("getting less average importances, this is pretty bad, should fix!!!")
     dir = "./importances_data/importances"
     imp_files = os.listdir(dir)
@@ -31,6 +31,7 @@ def get_importances():
     importances = {}
     for imp_file in tqdm(imp_files):
         importances.update(pd.read_pickle(f"{dir}/{imp_file}"))
+    
     return importances
 
 imps = get_importances()
@@ -42,20 +43,25 @@ def get_avg_imporances(importances):
             avg_imps[i] += layer_imps / len(importances)
     # TODO think harder about averaging method
     return avg_imps
+"""
 
-avg_importances = get_avg_imporances(imps)
+def get_mlps(model):
+    layers = model.get_submodule("model").get_submodule("layers")
+    return [layer.get_submodule("mlp") for layer in layers]
 
-model_id = "microsoft/phi-1_5"
-model_revision = "349cf8b5e81fd5f791d1740da5de1313a0419bbd" # latest as of feb 1st
+mlps = get_mlps(model)
 
-model = AutoModelForCausalLM.from_pretrained(
-    model_id,
-    revision=model_revision,
-    trust_remote_code=True,
-    # be careful with this?
-    torch_dtype=torch.float16,
-    # attn_implementation="flash_attention_2",
-)
+def get_lm_prunner_style_importances(model):
+    mlps = get_mlps(model)
+    imps = {}
+    imps_list = pd.read_pickle("average_importances_sorvisto.pkl")
+    for mlp, imp in zip(mlps, imps_list):
+        imps[mlp] = imp
+    return imps
+
+avg_imps = get_lm_prunner_style_importances(model)
 
 from prunners import prune_mlps_holistically
-from importances import get_mlps
+# from importances import get_mlps
+
+prune_mlps_holistically(avg_imps, 0.2)
