@@ -12,6 +12,7 @@ from matplotlib.colors import ListedColormap
 from sklearn.decomposition import PCA
 import os
 import pandas as pd
+import pickle
 
 def compute_clustering(data_dict, k):
     """ Runs clustering on the given data dict, which is a dictionary
@@ -183,6 +184,13 @@ def cluster_fit_all_layers(K=8):
         clusters_out[layer] = kmeans
     
     return preds_out, clusters_out, cluster_distributions
+
+def dump_clusters():
+    preds, clusters_models, _ = cluster_fit_all_layers()
+    with open('cluster_pkl/clustering_models.pkl', 'wb') as f:
+        pickle.dump(clusters_models, f)
+    with open('cluster_pkl/clustering_preds.pkl', 'wb') as f:
+        pickle.dump(preds, f)
         
 
 if __name__ == '__main__':
