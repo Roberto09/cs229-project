@@ -80,8 +80,8 @@ def prune_mlps_holistically(importances, prune_ratio):
         fc2 = mlp.fc2
         dtype = fc2.weight.dtype
         fc2_pruned = torch.nn.Linear(
-            fc2.weight.shape[1],
             keep_idx.shape[0],
+            fc2.weight.shape[0],
             dtype=dtype
         )
         with torch.no_grad():
