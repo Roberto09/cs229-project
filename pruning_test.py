@@ -23,28 +23,6 @@ model = AutoModelForCausalLM.from_pretrained(
     # attn_implementation="flash_attention_2",
 )
 
-"""def get_importances():
-    print("getting less average importances, this is pretty bad, should fix!!!")
-    dir = "./importances_data/importances"
-    imp_files = os.listdir(dir)
-    imp_files = [file for file in imp_files if file.endswith(".pkl")][:100]
-    importances = {}
-    for imp_file in tqdm(imp_files):
-        importances.update(pd.read_pickle(f"{dir}/{imp_file}"))
-    
-    return importances
-
-imps = get_importances()
-
-def get_avg_imporances(importances):
-    avg_imps = [torch.zeros_like(imp) for imp in list(importances.values())[0]]
-    for token, imps in tqdm(importances.items()):
-        for i, layer_imps in enumerate(imps):
-            avg_imps[i] += layer_imps / len(importances)
-    # TODO think harder about averaging method
-    return avg_imps
-"""
-
 def get_mlps(model):
     layers = model.get_submodule("model").get_submodule("layers")
     return [layer.get_submodule("mlp") for layer in layers]
@@ -62,6 +40,5 @@ def get_lm_prunner_style_importances(model):
 avg_imps = get_lm_prunner_style_importances(model)
 
 from prunners import prune_mlps_holistically
-# from importances import get_mlps
 
 prune_mlps_holistically(avg_imps, 0.2)
