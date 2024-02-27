@@ -145,10 +145,9 @@ def visualize_kmeans(vectors, decomp = PCA, k = 8):
     return kmeans_labels
 
 # Get precomputed importances
-def get_importances():
+def get_importances(dir='new_importances_data'):
     vector_dict = {}
-    dir = 'importances_data/importances'
-    for file in os.listdir(dir):
+    for file in tqdm(os.listdir(dir)):
         partial_vector_dict = pd.read_pickle(os.path.join(dir, file))
         vector_dict.update(partial_vector_dict)
 
