@@ -17,8 +17,8 @@ $ pip install -e .
 # default tasks
 TASKS = [
     # common sense reasoning
-    #"winogrande", # https://huggingface.co/datasets/winogrande
-    #"boolq", # https://huggingface.co/datasets/google/boolq
+    "winogrande", # https://huggingface.co/datasets/winogrande
+    "boolq", # https://huggingface.co/datasets/google/boolq
     
     # language understanding and knowledge
     "piqa", # https://huggingface.co/datasets/piqa
