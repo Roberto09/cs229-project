@@ -70,16 +70,44 @@ def compute_mlp_importance(mlps):
         importances.append(importance.detach().cpu())
     return importances
 
+def get_input(storage, key):
+    """
+    Get input into mlp layer in forward pass
+    """
+    def hook(module, input, output):
+        # Assuming the layer takes a single Tensor as input, store it
+        storage[key] = input[0].detach()
+    return hook
+
+
+def get_sample_input_trailing_token(mlp_input_dict):
+    """
+    Get single embedding(inputs into mlps) for each layer
+    for trailing token in sequence
+    """
+
+    # alwyas take first sequence, is randomly sampled beforehand, so no need to random sample again
+    # importances are based on the entire batch, but we only take one sample input
+    return [inputs[0, -1, :].cpu() for layer, inputs in mlp_input_dict.items()]
 
 def compute_delta_loss_importances(model, examples, idxs=None):
     """Computes and returns impotances of every hidden neuron in the model's
     mlps. Here we define importance as the change of the loss if we were to
     set the inbound and outbound weights of a neuron to 0."""
+    
     mlps = get_mlps(model)
     mlps = mlps if idxs is None else [mlps[i] for i in idxs]
+
+    mlp_input_dict = {}
+    hooks = []
     
+    for i, mlp in enumerate(mlps):
+        fc1 = mlp.fc1
+        hook = fc1.register_forward_hook(get_input(mlp_input_dict, i))
+        hooks.append(hook)
+        
     # compute and store first derivative squared
-    loss = compute_acc_grad(model, examples, mlps)
+    loss = compute_acc_grad(model.cuda(), examples.cuda(), mlps)
     torch.cuda.synchronize()
     
     # compute and store first derivative
@@ -89,7 +117,15 @@ def compute_delta_loss_importances(model, examples, idxs=None):
     # Once first derivative and second derivative squared are stored,
     # compute the importances.
     importances = compute_mlp_importance(mlps)
-    return importances
+
+    # cleanup
+    for hook in hooks:
+        hook.remove()
+
+    sample_inputs_trailing_token = get_sample_input_trailing_token(mlp_input_dict)
+    
+    return importances, sample_inputs_trailing_token
+
 
 def compute_random_importances(model, idxs=None):
     mlps = get_mlps(model)

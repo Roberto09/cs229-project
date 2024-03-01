@@ -104,6 +104,20 @@ def clean_data(data_dict, drop=0.05):
     drop = [data[i] for i in drop]
     return dict(keepers), dict(drop)
 
+def clean_vectors(vectors, drop=0.05):
+    """ Cleans up vectors by dropping outliers, which are defined
+    as those furthest from the centroid of the datadict.
+    """
+    dists = ((vectors - vectors.mean(axis=0))**2).sum(axis=1)
+    drop = int(drop * len(vectors))
+    
+    partition = np.argpartition(dists,-drop)
+    keep = partition[:-drop]
+    drop = partition[-drop:]
+    
+    keepers = [vectors[i] for i in keep]
+    return keepers
+
 def get_groups(data_dict, kmeans):
     """ Given a datadict and it's kmeans, returns it's groups.
     """
@@ -156,6 +170,20 @@ def get_importances(dir='new_importances_data'):
     
     return vector_dicts_layers
 
+def get_importances_inputs(dir='importances_inputs'):
+    """
+    get importances and sampled embeddings(mlp inputs)
+    """
+    vector_dict = {}
+    for file in tqdm(os.listdir(dir)):
+        partial_vector_dict = pd.read_pickle(os.path.join(dir, file))
+        vector_dict.update(partial_vector_dict)
+
+    n_layers = len(vector_dict[list(vector_dict.keys())[0]][0])
+    vector_dicts_layers = {i:{k:(v[0][i].numpy(), v[1][i].numpy()) for k,v in vector_dict.items()} for i in range(n_layers)}   
+    
+    return vector_dicts_layers
+
 def cluster_fit_all_layers(K=8, train_ratio = 0.2):
     vector_dicts_layers = get_importances()
     n_layers = len(list(vector_dicts_layers.keys()))
@@ -188,16 +216,55 @@ def cluster_fit_all_layers(K=8, train_ratio = 0.2):
     
     return preds_out, clusters_out, cluster_distributions
 
+def cluster_fit_all_layers_inputs(K=8):
+    """
+    fit KMeans and collect embeddings for each cluster per layer
+    """
+    vector_dicts_layers = get_importances_inputs()
+    n_layers = len(list(vector_dicts_layers.keys()))
+    
+    clusters_out = {} # layer -> fitted kmeans model
+    embeddings_clusters_out = {i:{} for i in range(n_layers)} # layer -> cluster -> (stacked list of embeddings)
+    cluster_distributions = {} # layer -> cluster distribution
+    for layer, layer_dict in tqdm(vector_dicts_layers.items()):
+        token_infos = layer_dict.keys() # not used in this context
+        importance_vectors = np.array([x[0] for x in layer_dict.values()]) # impor
+        input_embeddings = [x[1] for x in layer_dict.values()]
+
+        importance_vectors_clean = clean_vectors(importance_vectors)
+        kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
+        kmeans.fit(importance_vectors_clean)
+        cluster_preds = kmeans.predict(importance_vectors)
+        
+        c = Counter(cluster_preds)
+        cluster_distributions[layer] = sorted(c.items())
+
+        for c in c.keys():
+            embeddings_clusters_out[layer][c] = [] # setup, not guarenteed to have exactly k clusters
+
+        for i, embedding in enumerate(input_embeddings):
+            embeddings_clusters_out[layer][cluster_preds[i]].append(embedding)
+
+        clusters_out[layer] = kmeans
+    
+    return embeddings_clusters_out, clusters_out, cluster_distributions
+
 def dump_clusters(train_ratio=0.2):
     preds, clusters_models, _ = cluster_fit_all_layers(train_ratio=train_ratio)
     with open('cluster_pkl/clustering_models.pkl', 'wb') as f:
         pickle.dump(clusters_models, f)
     with open('cluster_pkl/clustering_preds.pkl', 'wb') as f:
         pickle.dump(preds, f)
+
+def dump_embeddings_clusters():
+    embeddings_clusters_out, _, _ = cluster_fit_all_layers_inputs()
+    with open('cluster_pkl/clustering_embeddings.pkl', 'wb') as f:
+        pickle.dump(embeddings_clusters_out, f)
         
 
 if __name__ == '__main__':
     #vector_dicts_layers = get_importances()
     #preds, clusters_models, cluster_distributions = cluster_fit_all_layers()
-    dump_clusters()
-    print()
+    #dump_clusters()
+
+    dump_embeddings_clusters()  
