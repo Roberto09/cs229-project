@@ -146,20 +146,21 @@ def mark_only_adapters_as_trainable(model, lora_config, adapter_name="default"):
     else:
         raise NotImplementedError(f"Requested bias: {bias}, is not implemented.")
     
-from cluster_router import ClusterRouter
+from topk_perceptron_router import TopKPerceptronRouter
 
 class Experts(nn.Module):
-    def __init__(self, model, phi_mlp, lora_config, layer, curr_token_idx_tracker, phi_mlp_config, num_experts=8):
+    def __init__(self, model, phi_mlp, lora_config, layer, phi_mlp_config, num_experts=8, K=2):
         super().__init__()
+        self.K = K
         self.num_experts = num_experts
         self.config = phi_mlp_config
         self.activation_fn = ACT2FN[self.config.hidden_act]
 
-        self.cluster_router = ClusterRouter(layer, 52_000, num_experts)
+        self.topk_router = TopKPerceptronRouter(2048, num_experts, layer, K) # hardcode input size
+        
         experts = [self.get_expert(model, phi_mlp, lora_config) for i in range(num_experts)]
         self.experts_fc1 = nn.ModuleList([exp[0] for exp in experts])
         self.experts_fc2 = nn.ModuleList([exp[1] for exp in experts])
-        self.curr_token_idx = curr_token_idx_tracker
 
     def get_expert(self, model, phi_mlp, lora_config):
         # TODO: Does this even makes sense? could this cause multiple copies of lora adapters?
@@ -177,35 +178,32 @@ class Experts(nn.Module):
             embeds_per_expert.append(curr_expert_embeds)
             embeds_orig_idxs.append(orig_idxs_tens[mask])
         return embeds_per_expert, embeds_orig_idxs
-
-    def forward(self, hidden_states):
-        # token ids?
-        expert_idxs = self.cluster_router(self.curr_token_idx)
-        expert_idxs = expert_idxs[:hidden_states.shape[0], :hidden_states.shape[1]] # (batch_size, tokens)
-        experts = expert_idxs.flatten()
-        
-        orig_embeds_shape = hidden_states.shape
-        embeds = hidden_states.reshape(orig_embeds_shape[0]*orig_embeds_shape[1], -1)
-        embeds_per_expert, embeds_orig_idxs = self.groupby_experts(experts, embeds)
-
-        res = torch.zeros(embeds.shape, dtype=embeds.dtype, device=embeds.device)
-        for embs, emb_idxs, exp_fc1, exp_fc2\
-            in zip(embeds_per_expert, embeds_orig_idxs, self.experts_fc1, self.experts_fc2):
-            embs = exp_fc2(self.activation_fn(exp_fc1(embs)))
-            res[emb_idxs] = embs
-       
-        return res.reshape(orig_embeds_shape)
-
-
-class EmbeddingTokenIdxTracker(nn.Module):
-    def __init__(self, orig_embed_layer):
-        super().__init__() 
-        self.idx_tracker = torch.zeros((2048, 2048), dtype=int)
-        self.embed = orig_embed_layer
     
-    def forward(self, inp_ids):
-        self.idx_tracker[:inp_ids.shape[0], :inp_ids.shape[1]] = inp_ids
-        return self.embed(inp_ids)
+    def forward(self, hidden_states):
+        batch_size, seq_len, feature_dim = hidden_states.shape
+        expert_idxs, expert_weights = self.topk_router(hidden_states)  # Shape: [batch_size, seq_len, k], [batch_size, seq_len, k]
+
+        res = torch.zeros_like(hidden_states)
+
+        # for each embedding, process one expert at a time(could potentially optimize later)
+        # group together embeddings that share expert i as their kth expert
+        for k in range(self.top_K):
+            experts = expert_idxs[:, :, k].flatten() # take k-th expert
+            weights = expert_weights[:, :, k].flatten()
+            embeds = hidden_states.view(-1, feature_dim)  # Flatten to [batch_size*seq_len, feature_dim]
+
+            embeds_per_expert, embeds_orig_idxs = self.groupby_experts(experts, embeds)
+
+            for embs, emb_idxs, exp_fc1, exp_fc2 in zip(embeds_per_expert, embeds_orig_idxs, self.experts_fc1, self.experts_fc2):
+                # Process the embeddings for this expert
+                processed_embs = exp_fc2(self.activation_fn(exp_fc1(embs)))  # Shape: [num_embs, feature_dim]
+                # Use weights to scale the processed embeddings
+                weighted_embs = processed_embs * weights[emb_idxs].unsqueeze(1)
+                # Accumulate results
+                res.view(-1, feature_dim)[emb_idxs] += weighted_embs
+
+        return res
+
 
 def prepare_as_if_peft_model(model, training_arguments, config):
     args = training_arguments
