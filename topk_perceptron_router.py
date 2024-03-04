@@ -20,12 +20,18 @@ class TopKPerceptronRouter(nn.Module):
         self.k = k
         self.fc = nn.Linear(input_size, n_experts)
         self.fc.weight = nn.Parameter(init_weights_by_centroids(layer))
-        
+
     def forward(self, x):
+        batch_size, seq_len, feature_dim = x.shape
+        x = x.view(-1, feature_dim)  # Shape: [batch_size * seq_len, feature_dim]
         logits = self.fc(x)
         softmax_values = F.softmax(logits, dim=1)
         top_k_expert_weights, top_k_experts_idx = torch.topk(softmax_values, self.k, dim=1)
-        return top_k_experts_idx, top_k_expert_weights # expert indices, expert_weights
+        
+        top_k_experts_idx = top_k_experts_idx.view(batch_size, seq_len, self.k)
+        top_k_expert_weights = top_k_expert_weights.view(batch_size, seq_len, self.k)
+        return top_k_experts_idx, top_k_expert_weights  # Shapes: [batch_size, seq_len, k], [batch_size, seq_len, k]    
+        
 
 if __name__ == '__main__':
      # test functionality in context
@@ -37,11 +43,14 @@ if __name__ == '__main__':
      idx = np.random.choice(embeddings.shape[0], size=50, replace=False)
      embeddings = embeddings[idx]
      embeddings = torch.tensor(embeddings, dtype = torch.float)
+
+     embeddings = embeddings.unsqueeze(1)
+     embeddings = embeddings.repeat(1, 192, 1)  # Shape: [batch_size, seq_len, feature_dim]
      
      router = TopKPerceptronRouter(2048, 8, layer, k=2)
-     experts_routed, expert_weights = router.forward(embeddings)
+     experts_routed, expert_weights = router(embeddings)
 
      router = TopKPerceptronRouter(2048, 8, layer, k=1)
-     experts_routed_, expert_weights_ = router.forward(embeddings)
+     experts_routed_, expert_weights_ = router(embeddings)
      
      print()
