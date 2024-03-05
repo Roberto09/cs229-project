@@ -124,11 +124,11 @@ def _prepare_module(
             weight = child.qweight if hasattr(child, "qweight") else child.weight
             module.to(weight.device)
 
-def mark_only_adapters_as_trainable(model, lora_config, adapter_name="default"):
-    prefix = "lora_"
+def mark_adapters_and_routers_as_trainable(model, lora_config, adapter_name="default"):
+    lora_prefix, router_prefix = "lora_", "_router"
     active_adapter = adapter_name
     for n, p in model.named_parameters():
-        if prefix not in n:
+        if not (lora_prefix in n or router_prefix in n):
             p.requires_grad = False
 
     bias = lora_config.bias
@@ -169,7 +169,7 @@ class Experts(nn.Module):
         return lora_fc1, lora_fc2
 
     def groupby_experts(self, experts, embeds):
-        orig_idxs_tens = torch.arange(len(embeds))
+        orig_idxs_tens = torch.arange(len(embeds), device = 'cuda:0')
         embeds_per_expert = []
         embeds_orig_idxs = []
         for e in range(self.num_experts):
@@ -187,7 +187,7 @@ class Experts(nn.Module):
 
         # for each embedding, process one expert at a time(could potentially optimize later)
         # group together embeddings that share expert i as their kth expert
-        for k in range(self.top_K):
+        for k in range(self.K):
             experts = expert_idxs[:, :, k].flatten() # take k-th expert
             weights = expert_weights[:, :, k].flatten()
             embeds = hidden_states.view(-1, feature_dim)  # Flatten to [batch_size*seq_len, feature_dim]

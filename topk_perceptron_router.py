@@ -20,6 +20,7 @@ class TopKPerceptronRouter(nn.Module):
         self.k = k
         self.fc = nn.Linear(input_size, n_experts)
         self.fc.weight = nn.Parameter(init_weights_by_centroids(layer))
+        self.fc.bias = nn.Parameter(torch.zeros(n_experts))
 
     def forward(self, x):
         batch_size, seq_len, feature_dim = x.shape
