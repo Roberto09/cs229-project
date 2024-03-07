@@ -158,7 +158,7 @@ class ModifiedLora(nn.Module):
         self.is_fc1 = is_fc1
         self.activation_fn = activation_fn
     
-    def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, x2=None, *args, **kwargs) -> torch.Tensor:
         # This is just copied from the original lora.Linear forward
         previous_dtype = x.dtype
         if self.orig_lora.disable_adapters:
@@ -179,13 +179,14 @@ class ModifiedLora(nn.Module):
             dropout = self.orig_lora.lora_dropout[active_adapter]
             scaling = self.orig_lora.scaling[active_adapter]
             h1 = self.orig_lora.base_layer(x, *args, **kwargs)
-            h2 = lora_B(lora_A(dropout(x))) * scaling
             if self.is_fc1:
-                result = self.activation_fn(h1) + self.activation_fn(h2)
+                h2 = lora_B(lora_A(dropout(x))) * scaling
+                result = self.activation_fn(h1).to(previous_dtype), self.activation_fn(h2).to(previous_dtype)
             else:
-                result = self.activation_fn(h1 + h2)
-        result = result.to(previous_dtype)
+                h2 = lora_B(lora_A(dropout(x2))) * scaling
+                result = self.activation_fn(h1 + h2).to(previous_dtype)
         return result
+
 
 class Experts(nn.Module):
     def __init__(
@@ -262,13 +263,14 @@ class Experts(nn.Module):
     def forward_expert(self, embs, exp_fc1, exp_fc2):
         if self.use_improved_lora:
             # activation function is done insisde the experts
-            return exp_fc2(exp_fc1(embs))
+            h1, h2 = exp_fc1(embs)
+            return exp_fc2(x=h1, x2=h2)
         else:
             return exp_fc2(self.activation_fn(exp_fc1(embs)))
-
+ 
     def forward_cluter_router(self, hidden_states):
         # token ids?
-        expert_idxs = self.cluster_router(self.curr_token_idx)
+        expert_idxs = self.router(self.curr_token_idx)
         # TODO: change the :hiden_states ... stuff to self.curr_token_idx instead
         expert_idxs = expert_idxs[:hidden_states.shape[0], :hidden_states.shape[1]] # (batch_size, tokens)
         experts = expert_idxs.flatten()
