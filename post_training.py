@@ -1,7 +1,6 @@
 from peft import LoraConfig
 import transformers
 from trl import SFTTrainer
-from peft.tuners.lora.layer import LoraLayer
 
 def get_lora_config(r=8, bias="none"):
     lora_config = LoraConfig(
