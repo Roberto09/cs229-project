@@ -1,16 +1,17 @@
 from peft import LoraConfig
 import transformers
 from trl import SFTTrainer
+from peft.tuners.lora.layer import LoraLayer
 
-def get_lora_config():
+def get_lora_config(r=8, bias="none"):
     lora_config = LoraConfig(
-        r=8,
+        r=r,
         lora_alpha=16,
         target_modules=[
             'fc1', # re-train prunned layers for now
             'fc2',
         ],
-        bias="none",
+        bias=bias,
         lora_dropout=0.05,
         task_type="CAUSAL_LM",
     )
