@@ -343,13 +343,13 @@ class Experts(nn.Module):
 class EmbeddingTokenIdxTracker(nn.Module):
     def __init__(self, orig_embed_layer):
         super().__init__() 
-        self.idx_tracker = torch.zeros((2048, 2048), dtype=int)
+        idx_tracker = torch.zeros((2048, 2048), dtype=int).cuda()
         self.embed = orig_embed_layer
+        self.register_buffer('idx_tracker', idx_tracker)
 
     def forward(self, inp_ids):
         self.idx_tracker[:inp_ids.shape[0], :inp_ids.shape[1]] = inp_ids
         return self.embed(inp_ids)
-    
 
 def prepare_as_if_peft_model(model, training_arguments, config):
     args = training_arguments

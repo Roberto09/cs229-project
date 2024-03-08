@@ -1,6 +1,7 @@
 import pickle
 from torch import nn, zeros, tensor, int
 from dataset_preprocessing import TokenInfo # for test
+import torch
 
 class ClusterRouter(nn.Module):
     def __init__(self, layer, vocab_size, n_experts):
@@ -12,8 +13,10 @@ class ClusterRouter(nn.Module):
             pred_dicts = pickle.load(file)
             cluster_preds_layer = pred_dicts[layer]
         
-        self.router = zeros(vocab_size, dtype=int)
-        
+        router = zeros(vocab_size, dtype=int)
+        self.register_buffer('router', router)
+        # self.register_buffer('cnt', torch.zeros(n_experts, dtype=int))
+
         for i in range(vocab_size):
             if i in cluster_preds_layer.keys():
                 self.router[i] = cluster_preds_layer[i]
@@ -22,7 +25,11 @@ class ClusterRouter(nn.Module):
         
     def forward(self, x):
         # x (tensor 2d): token ids
-        return self.router[x]  
+        res = self.router[x]
+        # res_s = res.view(-1)
+        # eos_tid = 50256
+        # self.cnt += torch.bincount(res_s[x.view(-1) != eos_tid])
+        return res
 
 if __name__ == '__main__':
     # test funcionality
