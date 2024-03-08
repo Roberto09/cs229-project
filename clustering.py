@@ -13,6 +13,7 @@ from sklearn.decomposition import PCA
 import os
 import pandas as pd
 import pickle
+from dataset_preprocessing import TokenInfo
 
 def compute_clustering(data_dict, k):
     """ Runs clustering on the given data dict, which is a dictionary
@@ -116,7 +117,7 @@ def clean_vectors(vectors, drop=0.05):
     drop = partition[-drop:]
     
     keepers = [vectors[i] for i in keep]
-    return keepers
+    return keepers, keep
 
 def get_groups(data_dict, kmeans):
     """ Given a datadict and it's kmeans, returns it's groups.
@@ -185,23 +186,27 @@ def get_importances_inputs(dir='importances_inputs'):
     return vector_dicts_layers
 
 def cluster_fit_all_layers(K=8, train_ratio = 0.2):
+    token_freq = TokenInfo().token_counts # this takes a minute or two
     vector_dicts_layers = get_importances()
     n_layers = len(list(vector_dicts_layers.keys()))
     
     clusters_out = {} # layer -> fitted kmeans model
     preds_out = {i:{} for i in range(n_layers)} # layer -> token_id -> predicted cluster
     cluster_distributions = {} # layer -> cluster distribution
+
+    
+
     for layer, v in tqdm(vector_dicts_layers.items()):
+        # weight by frequency
+        token_weights = np.array([token_freq[token_id[0]] for token_id in v.keys()])
         vectors_clean, _ = clean_data(v)
         vectors_clean_values = np.array(list(vectors_clean.values()))
 
         num_rows = vectors_clean_values.shape[0]
         idx = np.random.choice(num_rows, int(num_rows * train_ratio), replace=False)
 
-        # Maybe do PCA before clustering, however we didn't do that for
-        # the feasibility experiment
         kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
-        kmeans.fit(vectors_clean_values[idx])
+        kmeans.fit(vectors_clean_values[idx], sample_weight=token_weights[idx])
 
         vectors_all_values = np.array(list(v.values()))
         cluster_preds = kmeans.predict(vectors_all_values)
@@ -222,18 +227,22 @@ def cluster_fit_all_layers_inputs(K=8):
     """
     vector_dicts_layers = get_importances_inputs()
     n_layers = len(list(vector_dicts_layers.keys()))
+    token_freq = TokenInfo().token_counts # this takes a minute or two
     
     clusters_out = {} # layer -> fitted kmeans model
     embeddings_clusters_out = {i:{} for i in range(n_layers)} # layer -> cluster -> (stacked list of embeddings)
     cluster_distributions = {} # layer -> cluster distribution
     for layer, layer_dict in tqdm(vector_dicts_layers.items()):
         token_infos = layer_dict.keys() # not used in this context
-        importance_vectors = np.array([x[0] for x in layer_dict.values()]) # impor
+        token_weights = np.array([token_freq[token_id[0]] for token_id in token_infos])
+        importance_vectors = np.array([x[0] for x in layer_dict.values()])
         input_embeddings = [x[1] for x in layer_dict.values()]
 
-        importance_vectors_clean = clean_vectors(importance_vectors)
+        # this data is already sampled, dont need to select random indices to fit
+
+        importance_vectors_clean, clean_idx = clean_vectors(importance_vectors)
         kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
-        kmeans.fit(importance_vectors_clean)
+        kmeans.fit(importance_vectors_clean, sample_weight=token_weights[clean_idx])
         cluster_preds = kmeans.predict(importance_vectors)
         
         c = Counter(cluster_preds)
@@ -251,20 +260,17 @@ def cluster_fit_all_layers_inputs(K=8):
 
 def dump_clusters(train_ratio=0.2):
     preds, clusters_models, _ = cluster_fit_all_layers(train_ratio=train_ratio)
-    with open('cluster_pkl/clustering_models.pkl', 'wb') as f:
+    with open('cluster_pkl/clustering_models_weighted.pkl', 'wb') as f:
         pickle.dump(clusters_models, f)
-    with open('cluster_pkl/clustering_preds.pkl', 'wb') as f:
+    with open('cluster_pkl/clustering_preds_weighted.pkl', 'wb') as f:
         pickle.dump(preds, f)
 
 def dump_embeddings_clusters():
-    embeddings_clusters_out, _, _ = cluster_fit_all_layers_inputs()
-    with open('cluster_pkl/clustering_embeddings.pkl', 'wb') as f:
+    embeddings_clusters_out, _, cluster_distributions = cluster_fit_all_layers_inputs()
+    with open('cluster_pkl/clustering_embeddings_weighted.pkl', 'wb') as f:
         pickle.dump(embeddings_clusters_out, f)
         
 
 if __name__ == '__main__':
-    #vector_dicts_layers = get_importances()
-    #preds, clusters_models, cluster_distributions = cluster_fit_all_layers()
-    #dump_clusters()
-
-    dump_embeddings_clusters()  
+    dump_embeddings_clusters()
+    dump_clusters()

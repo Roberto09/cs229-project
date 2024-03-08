@@ -6,7 +6,7 @@ import numpy as np
 
 # this is assuming 8 experts
 def init_weights_by_centroids(layer):
-    with open('cluster_pkl/clustering_embeddings.pkl', 'rb') as file:
+    with open('cluster_pkl/clustering_embeddings_weighted.pkl', 'rb') as file:
             clustered_embeddings = pickle.load(file)
             clusters = [np.array(c) for c in clustered_embeddings[layer].values()]
             centroids = np.vstack([np.mean(c, axis = 0) for c in clusters])
