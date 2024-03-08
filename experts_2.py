@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from itertools import chain
 from torch import nn
-import pickle
 
 import torch
 from torch import nn
@@ -187,7 +186,6 @@ class ModifiedLora(nn.Module):
                 result = self.activation_fn(h1 + h2).to(previous_dtype)
         return result
 
-
 class Experts(nn.Module):
     def __init__(
         self,
@@ -195,49 +193,32 @@ class Experts(nn.Module):
         phi_mlp,
         lora_config,
         layer,
+        curr_token_idx_tracker,
         phi_mlp_config,
-        curr_token_idx_tracker=None,
         num_experts=8,
         K=None,
-        cluster_init_router=True,
         use_improved_lora=False,
-        store_outputs=False,
-        output_name="model"
     ):
         super().__init__()
+        self.K = K
         self.num_experts = num_experts
         self.config = phi_mlp_config
         self.use_improved_lora = use_improved_lora
         self.activation_fn = ACT2FN[self.config.hidden_act]
-        self.store_outputs=store_outputs
-        self.expert_stats = {i:(0, 0) for i in range(num_experts)} # expert_id: (count_routed, avg_weight)
-        self.output_name = output_name
-        self.K = K
-        self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router)
+        self.curr_token_idx = curr_token_idx_tracker
+        self.router = self._get_init_router(num_experts, layer, K, curr_token_idx_tracker)
         
         experts = [self.get_expert(model, phi_mlp, lora_config) for i in range(num_experts)]
         self.experts_fc1 = nn.ModuleList([exp[0] for exp in experts])
         self.experts_fc2 = nn.ModuleList([exp[1] for exp in experts])
 
-    def reset_expert_stats(self):
-        self.expert_stats = {i:(0, 0) for i in range(self.num_experts)}
-        
-    def expand_expert_stats(self):
-        dict_out = {}
-        total_embeds = sum(v[0] for _, v in self.expert_stats.items()) // self.K
-        for k, v in self.expert_stats.items():
-            dict_out[k] = v + (v[0]/total_embeds,) # proportion of embeddings routed to each expert out of all embeddings
-
-        return dict_out
-
-    def _get_init_router(self, layer, K, curr_token_idx_tracker, cluster_init_router):
+    def _get_init_router(self, num_experts, layer, K, curr_token_idx_tracker):
         # Use cluster router
-        if self.K is None:
+        if K is None:
             assert curr_token_idx_tracker is not None
-            assert not cluster_init_router
-            return ClusterRouter(layer, 52_000, self.num_experts)
+            return ClusterRouter(layer, 52_000, num_experts)
         # Use mlp router
-        return TopKPerceptronRouter(2048, self.num_experts, layer, K, cluster_init=cluster_init_router) # hardcode input size
+        return TopKPerceptronRouter(2048, num_experts, layer, K) # hardcode input size
 
     def get_expert(self, model, phi_mlp, lora_config):
         # TODO: Does this even makes sense? could this cause multiple copies of lora adapters?
@@ -266,7 +247,7 @@ class Experts(nn.Module):
             return exp_fc2(x=h1, x2=h2)
         else:
             return exp_fc2(self.activation_fn(exp_fc1(embs)))
- 
+
     def forward_cluter_router(self, hidden_states):
         # token ids?
         expert_idxs = self.router(self.curr_token_idx)
@@ -285,27 +266,10 @@ class Experts(nn.Module):
             res[emb_idxs] = embs
         return res.reshape(orig_embeds_shape)
 
-    def collect_routing_stats(self, expert_idxs, expert_weights):
-        assert (not self.training)
-        """
-        Collect routing statistics for one forward pass, that is count embeddings
-        that are routed to each expert and compute average softmax weight
-        """
-        experts_count = torch.bincount(expert_idxs.flatten().cpu(), minlength=self.num_experts).numpy()
-        experts_weight_sums = torch.bincount(expert_idxs.flatten().cpu(), weights=expert_weights.flatten().cpu(), minlength=self.num_experts).numpy()
-        for i in range(self.num_experts):
-            curr_count, curr_avg = self.expert_stats[i]
-            curr_sum = curr_count * curr_avg
-            self.expert_stats[i] = (curr_count + experts_count[i], (curr_sum + experts_weight_sums[i]) / (curr_count + experts_count[i]))
-            
-                    
     def forward_mlp_router(self, hidden_states):
         batch_size, seq_len, feature_dim = hidden_states.shape
-        expert_idxs, expert_weights = self.router(hidden_states)  # Shape: [batch_size, seq_len, k], [batch_size, seq_len, k]
+        expert_idxs, expert_weights = self.topk_router(hidden_states)  # Shape: [batch_size, seq_len, k], [batch_size, seq_len, k]
 
-        if not self.training and self.store_outputs:
-            self.collect_routing_stats(expert_idxs, expert_weights)
-            
         res = torch.zeros_like(hidden_states)
 
         # for each embedding, process one expert at a time(could potentially optimize later)
@@ -332,23 +296,18 @@ class Experts(nn.Module):
             return self.forward_cluter_router(hidden_states)
         # MLP router
         return self.forward_mlp_router(hidden_states)
-    
-    def dump_expert_stats(self):
-        with open(f'expert_routing_stats/{self.output_name}_layer{self.layer}.pkl', 'wb') as f:
-            pickle.dump(self.expert_stats, f)
-        
-        pass
 
 class EmbeddingTokenIdxTracker(nn.Module):
     def __init__(self, orig_embed_layer):
         super().__init__() 
-        idx_tracker = torch.zeros((2048, 2048), dtype=int).cuda()
+        self.idx_tracker = torch.zeros((2048, 2048), dtype=int)
         self.embed = orig_embed_layer
-        self.register_buffer('idx_tracker', idx_tracker)
 
     def forward(self, inp_ids):
         self.idx_tracker[:inp_ids.shape[0], :inp_ids.shape[1]] = inp_ids
         return self.embed(inp_ids)
+    
+
 
 def prepare_as_if_peft_model(model, training_arguments, config):
     args = training_arguments
