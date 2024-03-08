@@ -157,6 +157,8 @@ class ModifiedLora(nn.Module):
         self.orig_lora = orig_lora
         self.is_fc1 = is_fc1
         self.activation_fn = activation_fn
+        out_features = orig_lora.base_layer.out_features
+        self.lora_bias = nn.Parameter(torch.zeros(out_features))
     
     def forward(self, x: torch.Tensor, x2=None, *args, **kwargs) -> torch.Tensor:
         # This is just copied from the original lora.Linear forward
@@ -184,10 +186,10 @@ class ModifiedLora(nn.Module):
             * Bias of hidden neurons A_B_1(x) + b
             """
             if self.is_fc1:
-                h2 = lora_B(lora_A(dropout(x))) # * scaling
+                h2 = lora_B(lora_A(dropout(x))) + self.lora_bias # * scaling
                 result = self.activation_fn(h1).to(previous_dtype), self.activation_fn(h2).to(previous_dtype)
             else:
-                h2 = lora_B(lora_A(dropout(x2))) # * scaling
+                h2 = lora_B(lora_A(dropout(x2))) + self.lora_bias # * scaling
                 result = (h1 + h2).to(previous_dtype) # activation function here???
         return result
 
