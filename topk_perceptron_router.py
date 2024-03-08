@@ -15,12 +15,13 @@ def init_weights_by_centroids(layer):
 
 # For switch routing(https://arxiv.org/pdf/2101.03961.pdf) use k = 1
 class TopKPerceptronRouter(nn.Module):
-    def __init__(self, input_size, n_experts, layer, k):
+    def __init__(self, input_size, n_experts, layer, k, cluster_init=True):
         super().__init__()
         self.k = k
         self.fc = nn.Linear(input_size, n_experts)
-        self.fc.weight = nn.Parameter(init_weights_by_centroids(layer))
-        self.fc.bias = nn.Parameter(torch.zeros(n_experts))
+        if cluster_init:
+            self.fc.weight = nn.Parameter(init_weights_by_centroids(layer))
+            self.fc.bias = nn.Parameter(torch.zeros(n_experts))
 
     def forward(self, x):
         batch_size, seq_len, feature_dim = x.shape
