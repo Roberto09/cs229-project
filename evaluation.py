@@ -3,6 +3,7 @@ from lm_eval.tasks import TaskManager
 from lm_eval.api.registry import MODEL_REGISTRY
 from peft import  PeftModel
 import torch
+from functools import partial
 
 """
 TO BE ABLE TO USE THIS
@@ -26,7 +27,12 @@ TASKS = [
 ]
 
 class TaskManagerValid(TaskManager):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, _do_shuffle=True, *args, **kwargs):
+        self._do_shuffle = _do_shuffle
+        if _do_shuffle():
+            print("will shuffle dataset")
+        else:
+            print("will not shuffle dataset")
         super().__init__(*args, **kwargs)
 
     def make_task_valid_only(self, task):
@@ -37,8 +43,15 @@ class TaskManagerValid(TaskManager):
             return False
         def test_docs():
             return None
+        def validation_docs(orig_valid_docs_method):
+            ds = orig_valid_docs_method()
+            if self._do_shuffle:
+                ds = ds.shuffle(seed=123)
+            return ds
+
         task.has_test_docs = has_test_docs
         task.test_docs = test_docs
+        task.validation_docs = partial(validation_docs, task.validation_docs)
     
     def load_task_or_group(self, task_list) -> dict:
         task_dict = super().load_task_or_group(task_list)
@@ -57,6 +70,7 @@ def evaluate_on_nlp_tasks(
     return_samples = False,
     bootstrap_iters = 0, # number of bootrstrap iterations to compute statistics
     verbosity = "ERROR",
+    do_shuffle = False,
 ):
     """ This function will use the evaluation set of the datasets to do evaluation.
     """
@@ -78,7 +92,7 @@ def evaluate_on_nlp_tasks(
         limit=limit,
         log_samples=return_samples, # do not want to get samples in output for efficiency
         bootstrap_iters=bootstrap_iters, # avoid bootstrap statistics for efficiency
-        task_manager=TaskManagerValid(),
+        task_manager=TaskManagerValid(_do_shuffle=do_shuffle),
         verbosity=verbosity,
     )
     model.train(was_training)
@@ -97,4 +111,3 @@ def evaluate_checkpoint(base_model, checkpoint, tokenizer, tasks=None, limit=Non
     """
     model = PeftModel.from_pretrained(base_model, checkpoint)
     return evaluate_on_nlp_tasks(model, tokenizer, tasks=tasks, limit=limit)
-

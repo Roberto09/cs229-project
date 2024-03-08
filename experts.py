@@ -179,14 +179,50 @@ class ModifiedLora(nn.Module):
             dropout = self.orig_lora.lora_dropout[active_adapter]
             scaling = self.orig_lora.scaling[active_adapter]
             h1 = self.orig_lora.base_layer(x, *args, **kwargs)
+            """
+            Missing stuff:
+            * Bias of hidden neurons A_B_1(x) + b
+            """
             if self.is_fc1:
-                h2 = lora_B(lora_A(dropout(x))) * scaling
+                h2 = lora_B(lora_A(dropout(x))) # * scaling
                 result = self.activation_fn(h1).to(previous_dtype), self.activation_fn(h2).to(previous_dtype)
             else:
-                h2 = lora_B(lora_A(dropout(x2))) * scaling
-                result = self.activation_fn(h1 + h2).to(previous_dtype)
+                h2 = lora_B(lora_A(dropout(x2))) # * scaling
+                result = (h1 + h2).to(previous_dtype) # activation function here???
         return result
 
+class OnlyLowRankLora(nn.Module):
+    def __init__(self, orig_lora):
+        super().__init__()
+        self.orig_lora = orig_lora
+
+    def base_layer_forward(self, x):
+        return  self.orig_lora.base_layer(x)
+
+    def forward(self, x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        # This is just copied from the original lora.Linear forward
+        previous_dtype = x.dtype
+        if self.orig_lora.disable_adapters:
+            assert False
+            if self.orig_lora.merged:
+                self.orig_lora.unmerge()
+            result = self.orig_lora.base_layer(x, *args, **kwargs)
+        elif self.orig_lora.merged:
+            assert False
+            result = self.orig_lora.base_layer(x, *args, **kwargs)
+        else:
+            assert len(self.orig_lora.active_adapters) == 1
+            active_adapter = next(iter(self.orig_lora.active_adapters))
+            if active_adapter not in self.orig_lora.lora_A.keys():
+                assert False
+            lora_A = self.orig_lora.lora_A[active_adapter]
+            lora_B = self.orig_lora.lora_B[active_adapter]
+            dropout = self.orig_lora.lora_dropout[active_adapter]
+            scaling = self.orig_lora.scaling[active_adapter]
+            x = x.to(lora_A.weight.dtype)
+            result = lora_B(lora_A(dropout(x))) * scaling
+        return result.to(previous_dtype)
+    
 
 class Experts(nn.Module):
     def __init__(
@@ -243,9 +279,13 @@ class Experts(nn.Module):
         # TODO: Does this even makes sense? could this cause multiple copies of lora adapters?
         lora_fc1 = get_lora_adapter(model, phi_mlp.fc1, lora_config, "fc1")
         lora_fc2 = get_lora_adapter(model, phi_mlp.fc2, lora_config, "fc2")
+        assert type(lora_fc1) == Linear and type(lora_fc2) == Linear
         if self.use_improved_lora:
             lora_fc1 = ModifiedLora(lora_fc1, self.activation_fn, is_fc1=True)
             lora_fc2 = ModifiedLora(lora_fc2, self.activation_fn, is_fc1=False)
+        elif self.K is not None:
+            lora_fc1 = OnlyLowRankLora(lora_fc1)
+            lora_fc2 = OnlyLowRankLora(lora_fc2)
         return lora_fc1, lora_fc2
 
     def groupby_experts(self, experts, embeds):
@@ -297,35 +337,40 @@ class Experts(nn.Module):
             curr_count, curr_avg = self.expert_stats[i]
             curr_sum = curr_count * curr_avg
             self.expert_stats[i] = (curr_count + experts_count[i], (curr_sum + experts_weight_sums[i]) / (curr_count + experts_count[i]))
-            
                     
     def forward_mlp_router(self, hidden_states):
-        batch_size, seq_len, feature_dim = hidden_states.shape
+        assert not self.use_improved_lora, "improved lora not available yet for mlp router"
+        assert type(self.experts_fc1[0]) == type(self.experts_fc2[0]) == OnlyLowRankLora
+        
         expert_idxs, expert_weights = self.router(hidden_states)  # Shape: [batch_size, seq_len, k], [batch_size, seq_len, k]
-
         if not self.training and self.store_outputs:
             self.collect_routing_stats(expert_idxs, expert_weights)
-            
-        res = torch.zeros_like(hidden_states)
 
-        # for each embedding, process one expert at a time(could potentially optimize later)
-        # group together embeddings that share expert i as their kth expert
-        for k in range(self.K):
-            experts = expert_idxs[:, :, k].flatten() # take k-th expert
-            weights = expert_weights[:, :, k].flatten()
-            embeds = hidden_states.view(-1, feature_dim)  # Flatten to [batch_size*seq_len, feature_dim]
+        expert_idxs = [expert_idxs[:, :, k].flatten() for k in range(self.K)]
+        expert_weights = [expert_weights[:, :, k].flatten() for k in range(self.K)]
+        
+        # ========== First, do fc1 ==========
+        # Base layer - using the first fc1 should be fine, as the base layer is shared across experts
+        res = self.experts_fc1[0].base_layer_forward(hidden_states)
+        for experts, weights in zip(expert_idxs, expert_weights):
+            inps = hidden_states.view(-1, hidden_states.shape[-1])  # Flatten to [batch_size*seq_len, feature_dim]
+            inps_per_expert, inps_orig_idxs = self.groupby_experts(experts, inps)
+            for inp, inp_idxs, exp_fc1 in zip(inps_per_expert, inps_orig_idxs, self.experts_fc1):
+                out = exp_fc1(inp) * weights[inp_idxs].unsqueeze(1)
+                res.view(-1, res.shape[-1])[inp_idxs] += out
+        res = self.activation_fn(res) 
 
-            embeds_per_expert, embeds_orig_idxs = self.groupby_experts(experts, embeds)
+        # ========== Now, do fc2 ==========
+        # Base layer - using the first fc2 should be fine, as the base layer is shared across experts
+        res2 = self.experts_fc2[0].base_layer_forward(res)
+        for experts, weights in zip(expert_idxs, expert_weights):
+            inps = res.view(-1, res.shape[-1])
+            inps_per_expert, inps_orig_idxs = self.groupby_experts(experts, inps)
+            for inp, inp_idxs, exp_fc2 in zip(inps_per_expert, inps_orig_idxs, self.experts_fc2):
+                out = exp_fc2(inp) * weights[inp_idxs].unsqueeze(1)
+                res2.view(-1, res2.shape[-1])[inp_idxs] += out
+        return res2
 
-            for embs, emb_idxs, exp_fc1, exp_fc2 in zip(embeds_per_expert, embeds_orig_idxs, self.experts_fc1, self.experts_fc2):
-                # Process the embeddings for this expert
-                processed_embs = self.forward_expert(embs, exp_fc1, exp_fc2)
-                # Use weights to scale the processed embeddings
-                weighted_embs = processed_embs * weights[emb_idxs].unsqueeze(1)
-                # Accumulate results
-                res.view(-1, feature_dim)[emb_idxs] += weighted_embs
-        return res
-    
     def forward(self, hidden_states):
         # Cluster Router
         if self.K is None:
@@ -336,8 +381,6 @@ class Experts(nn.Module):
     def dump_expert_stats(self):
         with open(f'expert_routing_stats/{self.output_name}_layer{self.layer}.pkl', 'wb') as f:
             pickle.dump(self.expert_stats, f)
-        
-        pass
 
 class EmbeddingTokenIdxTracker(nn.Module):
     def __init__(self, orig_embed_layer):
