@@ -212,6 +212,7 @@ class Experts(nn.Module):
         self.store_outputs=store_outputs
         self.expert_stats = {i:(0, 0) for i in range(num_experts)} # expert_id: (count_routed, avg_weight)
         self.output_name = output_name
+        self.K = K
         self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router)
         
         experts = [self.get_expert(model, phi_mlp, lora_config) for i in range(num_experts)]
