@@ -199,7 +199,7 @@ class Experts(nn.Module):
         curr_token_idx_tracker=None,
         num_experts=8,
         K=None,
-        cluster_init_router=False,
+        cluster_init_router=True,
         use_improved_lora=False,
         store_outputs=False,
         output_name="model"
