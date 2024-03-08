@@ -199,22 +199,20 @@ class Experts(nn.Module):
         curr_token_idx_tracker=None,
         num_experts=8,
         K=None,
+        cluster_init_router=False,
         use_improved_lora=False,
         store_outputs=False,
         output_name="model"
     ):
         super().__init__()
-        self.K = K
         self.num_experts = num_experts
         self.config = phi_mlp_config
         self.use_improved_lora = use_improved_lora
         self.activation_fn = ACT2FN[self.config.hidden_act]
-        self.curr_token_idx_tracker = curr_token_idx_tracker
         self.store_outputs=store_outputs
         self.expert_stats = {i:(0, 0) for i in range(num_experts)} # expert_id: (count_routed, avg_weight)
-        self.layer = layer
         self.output_name = output_name
-        self.router = self._get_init_router()
+        self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router)
         
         experts = [self.get_expert(model, phi_mlp, lora_config) for i in range(num_experts)]
         self.experts_fc1 = nn.ModuleList([exp[0] for exp in experts])
@@ -230,15 +228,15 @@ class Experts(nn.Module):
             dict_out[k] = v + (v[0]/total_embeds,) # proportion of embeddings routed to each expert out of all embeddings
 
         return dict_out
-        
 
-    def _get_init_router(self):
+    def _get_init_router(self, layer, K, curr_token_idx_tracker, cluster_init_router):
         # Use cluster router
         if self.K is None:
-            assert self.curr_token_idx_tracker is not None
-            return ClusterRouter(self.layer, 52_000, self.num_experts)
+            assert curr_token_idx_tracker is not None
+            assert not cluster_init_router
+            return ClusterRouter(layer, 52_000, self.num_experts)
         # Use mlp router
-        return TopKPerceptronRouter(2048, self.num_experts, self.layer, self.K) # hardcode input size
+        return TopKPerceptronRouter(2048, self.num_experts, layer, K, cluster_init=cluster_init_router) # hardcode input size
 
     def get_expert(self, model, phi_mlp, lora_config):
         # TODO: Does this even makes sense? could this cause multiple copies of lora adapters?
