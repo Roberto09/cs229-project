@@ -251,6 +251,7 @@ class Experts(nn.Module):
         self.expert_stats = {i:(0, 0) for i in range(num_experts)} # expert_id: (count_routed, avg_weight)
         self.output_name = output_name
         self.K = K
+        self.curr_token_idx_tracker = curr_token_idx_tracker
         self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router)
         
         experts = [self.get_expert(model, phi_mlp, lora_config) for i in range(num_experts)]
@@ -311,7 +312,7 @@ class Experts(nn.Module):
  
     def forward_cluter_router(self, hidden_states):
         # token ids?
-        expert_idxs = self.router(self.curr_token_idx)
+        expert_idxs = self.router(self.curr_token_idx_tracker)
         # TODO: change the :hiden_states ... stuff to self.curr_token_idx instead
         expert_idxs = expert_idxs[:hidden_states.shape[0], :hidden_states.shape[1]] # (batch_size, tokens)
         experts = expert_idxs.flatten()

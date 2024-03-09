@@ -29,7 +29,7 @@ TASKS = [
 class TaskManagerValid(TaskManager):
     def __init__(self, _do_shuffle=True, *args, **kwargs):
         self._do_shuffle = _do_shuffle
-        if _do_shuffle():
+        if _do_shuffle:
             print("will shuffle dataset")
         else:
             print("will not shuffle dataset")
