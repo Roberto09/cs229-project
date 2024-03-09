@@ -9,7 +9,7 @@ class ClusterRouter(nn.Module):
         # vocac_size (int): size of tokenizer vocabulary, number of unique tokens
         super().__init__()
 
-        with open('cluster_pkl/clustering_preds_weighted.pkl', 'rb') as file:
+        with open('cluster_pkl/clustering_most_freq_preds.pkl', 'rb') as file:
             pred_dicts = pickle.load(file)
             cluster_preds_layer = pred_dicts[layer]
         
