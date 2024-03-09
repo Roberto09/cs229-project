@@ -85,10 +85,7 @@ def get_sample_input_trailing_token(mlp_input_dict):
     Get single embedding(inputs into mlps) for each layer
     for trailing token in sequence
     """
-
-    # alwyas take first sequence, is randomly sampled beforehand, so no need to random sample again
-    # importances are based on the entire batch, but we only take one sample input
-    return [inputs[0, -1, :].cpu() for layer, inputs in mlp_input_dict.items()]
+    return [torch.mean(inputs[:, -1, :].cpu(), dim=0) for layer, inputs in mlp_input_dict.items()]
 
 def compute_delta_loss_importances(model, examples, idxs=None):
     """Computes and returns impotances of every hidden neuron in the model's
