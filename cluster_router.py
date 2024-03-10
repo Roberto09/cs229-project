@@ -4,12 +4,12 @@ from dataset_preprocessing import TokenInfo # for test
 import torch
 
 class ClusterRouter(nn.Module):
-    def __init__(self, layer, vocab_size, n_experts):
+    def __init__(self, layer, vocab_size, n_experts, clusters_path='cluster_pkl/clustering_weighted_preds.pkl'):
         # layer (int): zero-indexed layer number
         # vocac_size (int): size of tokenizer vocabulary, number of unique tokens
         super().__init__()
 
-        with open('cluster_pkl/clustering_most_freq_preds.pkl', 'rb') as file:
+        with open(clusters_path, 'rb') as file:
             pred_dicts = pickle.load(file)
             cluster_preds_layer = pred_dicts[layer]
         
@@ -33,12 +33,15 @@ class ClusterRouter(nn.Module):
 
 if __name__ == '__main__':
     # test funcionality
-    cluster_router = ClusterRouter(0, 52000, 8) # not exact size of vocab
     token_info = TokenInfo()
     tokens_all = token_info.top_n(1000)
     examples = token_info.get_prefixes(tokens_all[999][0], 10, 10)
     examples = tensor(examples, device="cpu") # TODO: change to cuda
+
+    cluster_router = ClusterRouter(0, 52000, 8) # not exact size of vocab
+    cluster_router_ = ClusterRouter(0, 52000, 8, clusters_path='cluster_pkl/clustering_most_freq_preds.pkl') # not exact size of vocab
     
     experts_routed = cluster_router.forward(examples)
+    experts_routed_ = cluster_router_.forward(examples)
 
     print()

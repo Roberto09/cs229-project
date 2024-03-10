@@ -116,7 +116,7 @@ def clean_vectors(vectors, drop=0.05):
     keep = partition[:-drop]
     drop = partition[-drop:]
     
-    keepers = [vectors[i] for i in keep]
+    keepers = vectors[keep]
     return keepers, keep
 
 def get_groups(data_dict, kmeans):
@@ -283,42 +283,71 @@ def cluster_fit_all_layers(K=8, train_ratio = 0.2, weighted = True):
     
     return preds_out, cluster_distributions, cluster_freq_distributions
 
-def cluster_fit_all_layers_inputs(K=8):
+def cluster_fit_all_layers_inputs(K=8, pca=True, train_ratio = 0.25):
     """
     fit KMeans and collect embeddings for each cluster per layer
     """
     vector_dicts_layers = get_importances_inputs()
     n_layers = len(list(vector_dicts_layers.keys()))
-    token_freq = TokenInfo().token_counts # this takes a minute or two
     
-    clusters_out = {} # layer -> fitted kmeans model
-    embeddings_clusters_out = {i:{} for i in range(n_layers)} # layer -> cluster -> (stacked list of embeddings)
+    embeddings_clusters_out = {i:{} for i in range(n_layers)} # layer -> cluster -> (stacked list of embeddings and corresponding weights)
     cluster_distributions = {} # layer -> cluster distribution
+    cluster_freq_distributions = {} # layer -> cluster distribution by combined frequency of tokens
     for layer, layer_dict in tqdm(vector_dicts_layers.items()):
-        token_infos = layer_dict.keys() # not used in this context
-        token_weights = np.array([token_freq[token_id[0]] for token_id in token_infos])
+        token_infos = layer_dict.keys()
+        token_weights = np.array([token_id[2] for token_id in token_infos])
+        
         importance_vectors = np.array([x[0] for x in layer_dict.values()])
         input_embeddings = [x[1] for x in layer_dict.values()]
 
-        # this data is already sampled, dont need to select random indices to fit
+        if pca:
+            idx = np.random.choice(importance_vectors.shape[0], int(importance_vectors.shape[0] * 0.25), replace=False) # very costly to train pca on entire dataset
+            pca_train = importance_vectors[idx]
+            pca = PCA(n_components=0.95)
+            pca.fit(pca_train)
+            importance_vectors = pca.transform(importance_vectors)
+            print(f'layer:{layer}\n n_components: {pca.n_components_}') # for debug
+        
+        importance_vectors_clean, clean_idx = clean_vectors(importance_vectors) # remove outliers, if pca then remove outliers after pca
+        token_weights_clean = token_weights[clean_idx]
+        num_rows = importance_vectors_clean.shape[0]
+        idx = np.random.choice(num_rows, int(num_rows * train_ratio), replace=False)
+        importance_vectors_train = importance_vectors_clean[idx]
+        token_weights_train = token_weights_clean[idx]
 
-        importance_vectors_clean, clean_idx = clean_vectors(importance_vectors)
         kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
-        kmeans.fit(importance_vectors_clean, sample_weight=token_weights[clean_idx])
+        kmeans.fit(importance_vectors_train, sample_weight=token_weights_train)
         cluster_preds = kmeans.predict(importance_vectors)
         
         c = Counter(cluster_preds)
-        cluster_distributions[layer] = sorted(c.items())
+        cluster_distribution = sorted(c.items())
+        cluster_distributions[layer] = cluster_distribution
+        cluster_freq_distribution = [0 for _ in range(K)]
+        sum_clusters = sum([x[1] for x in cluster_distribution])
+        cluster_fractions = [round(x[1]/sum_clusters, 4) for x in cluster_distribution]
 
-        for c in c.keys():
-            embeddings_clusters_out[layer][c] = [] # setup, not guarenteed to have exactly k clusters
+        for i in range(K):
+            embeddings_clusters_out[layer][i] = []
 
         for i, embedding in enumerate(input_embeddings):
-            embeddings_clusters_out[layer][cluster_preds[i]].append(embedding)
+            pred_cluster = cluster_preds[i]
+            cluster_freq_distribution[pred_cluster] += token_weights[i] # token freq
+            embeddings_clusters_out[layer][pred_cluster].append((embedding, token_weights[i]))
+        
+        sum_freqs = sum(cluster_freq_distribution)
+        freq_fractions = [round(x/sum_freqs, 4) for x in cluster_freq_distribution]
+        cluster_freq_distributions[layer] = cluster_freq_distribution
 
-        clusters_out[layer] = kmeans
-    
-    return embeddings_clusters_out, clusters_out, cluster_distributions
+        avg_token_freq = [round(x/cluster_distribution[i][1], 2) for i, x in enumerate(cluster_freq_distribution)]
+
+        print(f'Layer: {layer}\n cluster distribution: \n{cluster_distributions[layer]}')
+        print(f'cluster fractions: \n{cluster_fractions}\n')
+        print(f'cluster combined freq distribution: \n{cluster_freq_distributions[layer]}')
+        print(f'cluster freq fractions: \n{freq_fractions}\n')
+        print(f'cluster average token frequency: \n{avg_token_freq}\n')
+
+
+    return embeddings_clusters_out, cluster_distributions, cluster_freq_distributions
 
 
 def dump_clusters_most_freq(percentile_train=95):
@@ -348,13 +377,22 @@ def dump_clusters(weighted=True):
         pickle.dump(cluster_freq_distributions, f)
 
 
-def dump_embeddings_clusters():
-    embeddings_clusters_out, _, cluster_distributions = cluster_fit_all_layers_inputs()
-    with open('cluster_pkl/clustering_embeddings_weighted.pkl', 'wb') as f:
+def dump_embeddings_clusters(pca=True):
+    embeddings_clusters_out, cluster_distributions, cluster_freq_distributions  = cluster_fit_all_layers_inputs(pca=pca)
+    with open(f'cluster_pkl/cluster_embeddings_{"PCA" if pca else ""}.pkl', 'wb') as f:
         pickle.dump(embeddings_clusters_out, f)
+    
+    with open(f'cluster_pkl/cluster_embeddings_distributions_{"PCA" if pca else ""}.pkl', 'wb') as f:
+        pickle.dump(cluster_distributions, f)
+    
+    with open(f'cluster_pkl/cluster_embeddings_freq_distributions_{"PCA" if pca else ""}.pkl', 'wb') as f:
+        pickle.dump(cluster_freq_distributions, f)
+    
         
 
 if __name__ == '__main__':
-    dump_clusters(weighted=False)
-    dump_clusters(weighted=True)
-    dump_clusters_most_freq()
+    #dump_clusters(weighted=False)
+    #dump_clusters(weighted=True)
+    #dump_clusters_most_freq()
+    dump_embeddings_clusters(pca=True)
+    dump_embeddings_clusters(pca=False)

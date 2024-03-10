@@ -5,22 +5,25 @@ import pickle
 import numpy as np
 
 # this is assuming 8 experts
-def init_weights_by_centroids(layer):
-    with open('cluster_pkl/clustering_embeddings_weighted.pkl', 'rb') as file:
+def init_weights_by_centroids(layer, use_pca_clusters):
+    cluster_path = f'cluster_pkl/cluster_embeddings_{"PCA" if use_pca_clusters else ""}.pkl'
+    with open(cluster_path, 'rb') as file:
             clustered_embeddings = pickle.load(file)
-            clusters = [np.array(c) for c in clustered_embeddings[layer].values()]
-            centroids = np.vstack([np.mean(c, axis = 0) for c in clusters])
+            clusters = list(clustered_embeddings[layer].values())
+            cluster_embeddings = [[x[0] for x in c] for c in clusters]
+            cluster_weights = [np.array([x[1] for x in c]) for c in clusters]
+            centroids = np.vstack([np.average(c, axis = 0, weights = cluster_weights[i]) for i, c in enumerate(cluster_embeddings)])
     
     return torch.tensor(centroids, dtype = torch.float)
 
 # For switch routing(https://arxiv.org/pdf/2101.03961.pdf) use k = 1
 class TopKPerceptronRouter(nn.Module):
-    def __init__(self, input_size, n_experts, layer, k, cluster_init=True):
+    def __init__(self, input_size, n_experts, layer, k, cluster_init=True, use_pca_clusters=False):
         super().__init__()
         self.k = k
         self.fc = nn.Linear(input_size, n_experts)
         if cluster_init:
-            self.fc.weight = nn.Parameter(init_weights_by_centroids(layer))
+            self.fc.weight = nn.Parameter(init_weights_by_centroids(layer, use_pca_clusters))
             self.fc.bias = nn.Parameter(torch.zeros(n_experts))
 
     def forward(self, x):
@@ -38,21 +41,29 @@ class TopKPerceptronRouter(nn.Module):
 if __name__ == '__main__':
      # test functionality in context
      layer = 12
-     with open('cluster_pkl/clustering_embeddings.pkl', 'rb') as file:
+     with open('cluster_pkl/cluster_embeddings_.pkl', 'rb') as file:
             clustered_embeddings = pickle.load(file)
-
-     embeddings = np.vstack([np.array(c) for c in clustered_embeddings[layer].values()])
-     idx = np.random.choice(embeddings.shape[0], size=50, replace=False)
+    
+     clusters = list(clustered_embeddings[layer].values())
+     cluster_embeddings = [[x[0] for x in c] for c in clusters]
+     embeddings = np.vstack(cluster_embeddings[3]) # pick random
+     idx = np.random.choice(embeddings.shape[0], size=50, replace=True)
      embeddings = embeddings[idx]
      embeddings = torch.tensor(embeddings, dtype = torch.float)
 
      embeddings = embeddings.unsqueeze(1)
      embeddings = embeddings.repeat(1, 192, 1)  # Shape: [batch_size, seq_len, feature_dim]
      
-     router = TopKPerceptronRouter(2048, 8, layer, k=2)
+     router = TopKPerceptronRouter(2048, 8, layer, k=2, use_pca_clusters=True)
+     experts_routed_pca, expert_weights_pca = router(embeddings)
+
+     router = TopKPerceptronRouter(2048, 8, layer, k=1, use_pca_clusters=True)
+     experts_routed_pca_, expert_weights_pca_ = router(embeddings)
+
+     router = TopKPerceptronRouter(2048, 8, layer, k=2, use_pca_clusters=False)
      experts_routed, expert_weights = router(embeddings)
 
-     router = TopKPerceptronRouter(2048, 8, layer, k=1)
+     router = TopKPerceptronRouter(2048, 8, layer, k=1, use_pca_clusters=False)
      experts_routed_, expert_weights_ = router(embeddings)
      
      print()
