@@ -240,7 +240,9 @@ class Experts(nn.Module):
         cluster_init_router=True,
         use_improved_lora=False,
         store_outputs=False,
-        output_name="model"
+        output_name="model",
+        clusters_file=None, # uses weighted clusters by default
+        count_clusters=False, # whether to keep track of how ofter clusters are accessed
     ):
         super().__init__()
         self.num_experts = num_experts
@@ -252,7 +254,7 @@ class Experts(nn.Module):
         self.output_name = output_name
         self.K = K
         self.curr_token_idx_tracker = curr_token_idx_tracker
-        self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router)
+        self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router, clusters_file, count_clusters)
         
         experts = [self.get_expert(model, phi_mlp, lora_config) for i in range(num_experts)]
         self.experts_fc1 = nn.ModuleList([exp[0] for exp in experts])
@@ -269,12 +271,12 @@ class Experts(nn.Module):
 
         return dict_out
 
-    def _get_init_router(self, layer, K, curr_token_idx_tracker, cluster_init_router):
+    def _get_init_router(self, layer, K, curr_token_idx_tracker, cluster_init_router, clusters_file, count_clusters):
         # Use cluster router
         if self.K is None:
             assert curr_token_idx_tracker is not None
             assert not cluster_init_router
-            return ClusterRouter(layer, 52_000, self.num_experts)
+            return ClusterRouter(layer, 52_000, self.num_experts, clusters_file, count_clusters)
         # Use mlp router
         return TopKPerceptronRouter(2048, self.num_experts, layer, K, cluster_init=cluster_init_router) # hardcode input size
 
@@ -312,9 +314,7 @@ class Experts(nn.Module):
  
     def forward_cluter_router(self, hidden_states):
         # token ids?
-        expert_idxs = self.router(self.curr_token_idx_tracker)
-        # TODO: change the :hiden_states ... stuff to self.curr_token_idx instead
-        expert_idxs = expert_idxs[:hidden_states.shape[0], :hidden_states.shape[1]] # (batch_size, tokens)
+        expert_idxs = self.router(self.curr_token_idx_tracker[:hidden_states.shape[0], :hidden_states.shape[1]])
         experts = expert_idxs.flatten()
         
         orig_embeds_shape = hidden_states.shape
