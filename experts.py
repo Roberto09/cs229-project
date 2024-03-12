@@ -12,6 +12,7 @@ import inspect
 from peft import PeftConfig, PeftModel, get_peft_model, prepare_model_for_kbit_training
 import dataclasses
 from cluster_router import ClusterRouter
+from post_training import get_lora_config
 
 from peft.import_utils import is_bnb_4bit_available, is_bnb_available
 from peft.utils import get_quantization_config
@@ -239,6 +240,7 @@ class Experts(nn.Module):
         K=None,
         cluster_init_router=True,
         use_improved_lora=False,
+        lora_at_base_improved_lora=False,
         store_outputs=False,
         output_name="model",
         clusters_file=None, # uses weighted clusters by default
@@ -248,6 +250,7 @@ class Experts(nn.Module):
         self.num_experts = num_experts
         self.config = phi_mlp_config
         self.use_improved_lora = use_improved_lora
+        self.lora_at_base_improved_lora = lora_at_base_improved_lora
         self.activation_fn = ACT2FN[self.config.hidden_act]
         self.store_outputs=store_outputs
         self.expert_stats = {i:(0, 0) for i in range(num_experts)} # expert_id: (count_routed, avg_weight)
@@ -255,8 +258,14 @@ class Experts(nn.Module):
         self.K = K
         self.curr_token_idx_tracker = curr_token_idx_tracker
         self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router, clusters_file, count_clusters)
-        
-        experts = [self.get_expert(model, phi_mlp, lora_config) for i in range(num_experts)]
+
+        experts = [self.get_expert(model, phi_mlp, lora_config, use_improved_lora) for i in range(num_experts)]
+        if use_improved_lora and lora_at_base_improved_lora:
+            base_lora_config = get_lora_config(r=64)
+            base_lora_fc1, base_lora_fc2 = self.get_expert(model, phi_mlp, base_lora_config, use_improved_lora=False)
+            for expert in experts:
+                expert[0].orig_lora.base_layer = base_lora_fc1
+                expert[1].orig_lora.base_layer = base_lora_fc2
         self.experts_fc1 = nn.ModuleList([exp[0] for exp in experts])
         self.experts_fc2 = nn.ModuleList([exp[1] for exp in experts])
 
@@ -280,12 +289,12 @@ class Experts(nn.Module):
         # Use mlp router
         return TopKPerceptronRouter(2048, self.num_experts, layer, K, cluster_init=cluster_init_router) # hardcode input size
 
-    def get_expert(self, model, phi_mlp, lora_config):
+    def get_expert(self, model, phi_mlp, lora_config, use_improved_lora):
         # TODO: Does this even makes sense? could this cause multiple copies of lora adapters?
         lora_fc1 = get_lora_adapter(model, phi_mlp.fc1, lora_config, "fc1")
         lora_fc2 = get_lora_adapter(model, phi_mlp.fc2, lora_config, "fc2")
         assert type(lora_fc1) == Linear and type(lora_fc2) == Linear
-        if self.use_improved_lora:
+        if use_improved_lora:
             lora_fc1 = ModifiedLora(lora_fc1, self.activation_fn, is_fc1=True)
             lora_fc2 = ModifiedLora(lora_fc2, self.activation_fn, is_fc1=False)
         elif self.K is not None:
