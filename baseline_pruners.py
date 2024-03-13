@@ -8,7 +8,7 @@ def prune_mlp_random(mlp, prune_ratio):
     fc1 = mlp.fc1
     dtype = fc1.weight.dtype
     num_prune_cells = int(fc1.weight.shape[0] * prune_ratio)
-    keep_cells = torch.randperm(fc1.weight.shape[0])[:num_prune_cells]
+    keep_cells = torch.randperm(fc1.weight.shape[0])[num_prune_cells:]
     
     fc1_pruned = torch.nn.Linear(
         fc1.weight.shape[1],
@@ -38,6 +38,8 @@ def prune_mlp_magnitude(mlp, prune_ratio):
     dtype = fc1.weight.dtype
     num_prune_cells = int(fc1.weight.shape[0] * prune_ratio)
     row_norms = torch.norm(fc1.weight, p=1, dim=1)
+    col_norms = torch.norm(fc2.weight.T, p=1, dim=1)
+    l1_imps = row_norms + col_norms
     sorted_magnitude_idx = torch.argsort(row_norms)
 
     keep_cells = sorted_magnitude_idx[num_prune_cells:]
