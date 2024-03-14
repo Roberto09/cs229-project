@@ -16,7 +16,7 @@ def init_weights_by_centroids(layer, use_pca_clusters):
     
     return torch.tensor(centroids, dtype = torch.float)
 
-# For switch routing(https://arxiv.org/pdf/2101.03961.pdf) use k = 1
+# https://arxiv.org/abs/1701.06538
 class TopKPerceptronRouter(nn.Module):
     def __init__(self, input_size, n_experts, layer, k, cluster_init=True, use_pca_clusters=False):
         super().__init__()
@@ -30,12 +30,17 @@ class TopKPerceptronRouter(nn.Module):
         batch_size, seq_len, feature_dim = x.shape
         x = x.view(-1, feature_dim)  # Shape: [batch_size * seq_len, feature_dim]
         logits = self.fc(x)
-        softmax_values = F.softmax(logits, dim=1)
+        
+        top_k_values, _ = torch.topk(logits, self.k, dim=1)
+        min_top_k_values = top_k_values[:, -1, None]
+        modified_logits = torch.where(logits >= min_top_k_values, logits, torch.tensor(float('-inf')).to(logits.device)) # normalize
+        softmax_values = F.softmax(modified_logits, dim=1)
         top_k_expert_weights, top_k_experts_idx = torch.topk(softmax_values, self.k, dim=1)
         
         top_k_experts_idx = top_k_experts_idx.view(batch_size, seq_len, self.k)
         top_k_expert_weights = top_k_expert_weights.view(batch_size, seq_len, self.k)
-        return top_k_experts_idx, top_k_expert_weights  # Shapes: [batch_size, seq_len, k], [batch_size, seq_len, k]    
+        
+        return top_k_experts_idx, top_k_expert_weights  # Shapes: [batch_size, seq_len, k], [batch_size, seq_len, k]  
         
 
 if __name__ == '__main__':
@@ -54,16 +59,11 @@ if __name__ == '__main__':
      embeddings = embeddings.unsqueeze(1)
      embeddings = embeddings.repeat(1, 192, 1)  # Shape: [batch_size, seq_len, feature_dim]
      
-     router = TopKPerceptronRouter(2048, 8, layer, k=2, use_pca_clusters=True)
-     experts_routed_pca, expert_weights_pca = router(embeddings)
-
-     router = TopKPerceptronRouter(2048, 8, layer, k=1, use_pca_clusters=True)
-     experts_routed_pca_, expert_weights_pca_ = router(embeddings)
-
      router = TopKPerceptronRouter(2048, 8, layer, k=2, use_pca_clusters=False)
      experts_routed, expert_weights = router(embeddings)
 
-     router = TopKPerceptronRouter(2048, 8, layer, k=1, use_pca_clusters=False)
-     experts_routed_, expert_weights_ = router(embeddings)
+     gate_sums = torch.sum(expert_weights, dim=2).flatten()
+     min_ = torch.min(gate_sums)
+     max_ = torch.max(gate_sums)
      
      print()
