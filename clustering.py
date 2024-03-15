@@ -159,6 +159,18 @@ def visualize_kmeans(vectors, decomp = PCA, k = 8):
     
     return kmeans_labels
 
+def visualize(vectors, kmeans_labels, layer, k = 8, decomp = PCA):
+    decomp_ = decomp(n_components=3, random_state=42)
+    vec_decomp = decomp_.fit_transform(vectors)
+
+    ax = plt.figure(figsize=(12, 8)).add_subplot(projection='3d')
+    colors = ['blue', 'green', 'red', 'black', 'yellow', 'purple', 'pink', 'brown']
+
+    scatter = ax.scatter(vec_decomp[:, 0], vec_decomp[:, 1], vec_decomp[:, 2], cmap=ListedColormap(colors[:k]), c=kmeans_labels, s=10)
+
+    plt.title('K-means Clusters')
+    plt.savefig(f"clusters_{layer}.png")
+
 # Get precomputed importances
 def get_importances(dir='new_importances_data'):
     vector_dict = {}
@@ -237,39 +249,54 @@ def cluster_fit_all_layers_most_freq(K=8, percentile_train=95):
 
     return preds_out, cluster_distributions, cluster_freq_distributions
 
-def cluster_fit_all_layers(K=8, train_ratio = 0.2, weighted = True):
+def cluster_fit_all_layers(K=8, train_ratio = 0.25, weighted = True):
     print(f'Running {"weighted" if weighted else "unweighted"} clustering, with random sampled tokens\n')
+    token_info = TokenInfo()
+    top10k = set(token_info.top_n(10_000))
+    del token_info
+
     vector_dicts_layers = get_importances()
     n_layers = len(list(vector_dicts_layers.keys()))
     
     preds_out = {i:{} for i in range(n_layers)} # layer -> token_id -> predicted cluster
+    preds_out_decoded = {i:{j: [] for j in range(K)} for i in range(n_layers)} # layer -> cluster > list of tokens
     cluster_distributions = {} # layer -> cluster distribution
     cluster_freq_distributions = {} # layer -> cluster distribution by combined frequency of tokens
 
-    for layer, v in tqdm(vector_dicts_layers.items()):       
-        vectors_clean, _ = clean_data(v)
-        vectors_clean_values = np.array(list(vectors_clean.values()))
+    for layer, layer_dict in tqdm(vector_dicts_layers.items()):
+        token_infos = layer_dict.keys()
+        importance_vectors = np.array(list(layer_dict.values()))
 
-        num_rows = vectors_clean_values.shape[0]
+        # only train on top 10k tokens
+        top10k_dict = {k:v for k,v in layer_dict.items() if k in top10k}
+        token_weights = np.log(np.array([token_id[2] for token_id in top10k_dict.keys()]))
+        top10k_importance_vectors = np.array(list(top10k_dict.values()))
+        
+        importance_vectors_clean, clean_idx = clean_vectors(top10k_importance_vectors) # remove outliers
+        token_weights_clean = token_weights[clean_idx]
+        num_rows = importance_vectors_clean.shape[0]
+        
         idx = np.random.choice(num_rows, int(num_rows * train_ratio), replace=False)
+        importance_vectors_train = importance_vectors_clean[idx]
+        token_weights_train = token_weights_clean[idx]
 
         kmeans = KMeans(n_clusters=K, random_state=42, n_init=10)
         if weighted:
-            token_weights = np.array([token_id[2] for token_id in v.keys()])
-            kmeans.fit(vectors_clean_values[idx], sample_weight=token_weights[idx])
+            kmeans.fit(importance_vectors_train, sample_weight=token_weights_train)
         else:
-            kmeans.fit(vectors_clean_values[idx])
+            kmeans.fit(importance_vectors_train)
 
-        vectors_all_values = np.array(list(v.values()))
-        cluster_preds = kmeans.predict(vectors_all_values)
+        cluster_preds = kmeans.predict(importance_vectors)
 
         # distribution by adding up frequency of each token
         cluster_freq_distribution = [0 for _ in range(K)]
 
-        for i, k in enumerate(v.keys()):
+        for i, k in enumerate(token_infos):
             pred_cluster = cluster_preds[i]
             cluster_freq_distribution[pred_cluster] += k[2] # token freq
             preds_out[layer][k[0]] = pred_cluster
+            preds_out_decoded[layer][pred_cluster].append(k)
+
         
         sum_freqs = sum(cluster_freq_distribution)
         freq_fractions = [round(x/sum_freqs, 4) for x in cluster_freq_distribution]
@@ -281,7 +308,7 @@ def cluster_fit_all_layers(K=8, train_ratio = 0.2, weighted = True):
         print(f'cluster combined freq distribution: \n{cluster_freq_distributions[layer]}')
         print(f'cluster freq fractions distribution: \n{freq_fractions}\n')
     
-    return preds_out, cluster_distributions, cluster_freq_distributions
+    return preds_out, cluster_distributions, cluster_freq_distributions, preds_out_decoded
 
 def cluster_fit_all_layers_inputs(K=8, pca=True, train_ratio = 0.25):
     """
@@ -295,7 +322,7 @@ def cluster_fit_all_layers_inputs(K=8, pca=True, train_ratio = 0.25):
     cluster_freq_distributions = {} # layer -> cluster distribution by combined frequency of tokens
     for layer, layer_dict in tqdm(vector_dicts_layers.items()):
         token_infos = layer_dict.keys()
-        token_weights = np.array([token_id[2] for token_id in token_infos])
+        token_weights = np.log(np.array([token_id[2] for token_id in token_infos])) # try to weight with log
         
         importance_vectors = np.array([x[0] for x in layer_dict.values()])
         input_embeddings = [x[1] for x in layer_dict.values()]
@@ -346,7 +373,6 @@ def cluster_fit_all_layers_inputs(K=8, pca=True, train_ratio = 0.25):
         print(f'cluster freq fractions: \n{freq_fractions}\n')
         print(f'cluster average token frequency: \n{avg_token_freq}\n')
 
-
     return embeddings_clusters_out, cluster_distributions, cluster_freq_distributions
 
 
@@ -364,7 +390,7 @@ def dump_clusters_most_freq(percentile_train=95):
         pickle.dump(cluster_freq_distributions, f)
 
 def dump_clusters(weighted=True):
-    preds, cluster_distributions, cluster_freq_distributions\
+    preds, cluster_distributions, cluster_freq_distributions, preds_decoded\
           = cluster_fit_all_layers(weighted=weighted)
     
     with open(f'cluster_pkl/clustering_{"weighted" if weighted else "unweighted"}_preds.pkl', 'wb') as f:
@@ -375,6 +401,9 @@ def dump_clusters(weighted=True):
     
     with open(f'cluster_pkl/clustering_{"weighted" if weighted else "unweighted"}_cluster_freq_distributions.pkl', 'wb') as f:
         pickle.dump(cluster_freq_distributions, f)
+    
+    with open(f'cluster_pkl/clustering_{"weighted" if weighted else "unweighted"}_preds_decoded.pkl', 'wb') as f:
+        pickle.dump(preds_decoded, f)
 
 
 def dump_embeddings_clusters(pca=True):
@@ -391,8 +420,8 @@ def dump_embeddings_clusters(pca=True):
         
 
 if __name__ == '__main__':
-    #dump_clusters(weighted=False)
+    dump_clusters(weighted=True)
     #dump_clusters(weighted=True)
     #dump_clusters_most_freq()
-    dump_embeddings_clusters(pca=True)
+    #dump_embeddings_clusters(pca=True)
     dump_embeddings_clusters(pca=False)
