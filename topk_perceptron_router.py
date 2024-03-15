@@ -11,7 +11,7 @@ def init_weights_by_centroids(layer, use_pca_clusters):
             clustered_embeddings = pickle.load(file)
             clusters = list(clustered_embeddings[layer].values())
             cluster_embeddings = [[x[0] for x in c] for c in clusters]
-            cluster_weights = [np.array([x[1] for x in c]) for c in clusters]
+            cluster_weights = [np.log(np.array([x[1] for x in c])) for c in clusters]
             centroids = np.vstack([np.average(c, axis = 0, weights = cluster_weights[i]) for i, c in enumerate(cluster_embeddings)])
     
     return torch.tensor(centroids, dtype = torch.float)
