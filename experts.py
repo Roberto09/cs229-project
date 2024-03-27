@@ -260,6 +260,8 @@ class Experts(nn.Module):
         self.router = self._get_init_router(layer, K, curr_token_idx_tracker, cluster_init_router, clusters_file, count_clusters)
 
         experts = [self.get_expert(model, phi_mlp, lora_config, use_improved_lora) for i in range(num_experts)]
+        if use_improved_lora:
+            assert lora_at_base_improved_lora, "wont work if lora_at_base_improved_lora is not set"
         if use_improved_lora and lora_at_base_improved_lora:
             base_lora_config = get_lora_config(r=64)
             base_lora_fc1, base_lora_fc2 = self.get_expert(model, phi_mlp, base_lora_config, use_improved_lora=False)
@@ -291,8 +293,19 @@ class Experts(nn.Module):
 
     def get_expert(self, model, phi_mlp, lora_config, use_improved_lora):
         # TODO: Does this even makes sense? could this cause multiple copies of lora adapters?
-        lora_fc1 = get_lora_adapter(model, phi_mlp.fc1, lora_config, "fc1")
-        lora_fc2 = get_lora_adapter(model, phi_mlp.fc2, lora_config, "fc2")
+        fc1, fc2 = phi_mlp.fc1, phi_mlp.fc2
+        if use_improved_lora:
+            # When using improved lora we want to model the pruned part of the model.
+            # We trick the lora adapter function to give us a lora adapter for that
+            # TODO undo hardcoding of 8192
+            new_fc1 = nn.Linear(fc1.in_features, 8192 - fc1.out_features)#.to(fc1.weights.device)
+            new_fc2 = nn.Linear(8192 - fc2.in_features, fc2.out_features)#.to(fc2.weights.device)
+            assert new_fc1.weight.device == fc1.weight.device
+            assert new_fc2.weight.dtype == fc2.weight.dtype
+            fc1 = new_fc1
+            fc2 = new_fc2
+        lora_fc1 = get_lora_adapter(model, fc1, lora_config, "fc1")
+        lora_fc2 = get_lora_adapter(model, fc2, lora_config, "fc2")
         assert type(lora_fc1) == Linear and type(lora_fc2) == Linear
         if use_improved_lora:
             lora_fc1 = ModifiedLora(lora_fc1, self.activation_fn, is_fc1=True)
