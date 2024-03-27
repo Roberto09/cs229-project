@@ -57,18 +57,30 @@ class TokenInfo():
   
         print('...Loading complete...')
     
-    def get_prefixes(self, token, prefix_len, n):
+    def get_prefixes_plus_one(self, token, prefix_len, n):
+        # gets n samples consisting of [prefix_len-1 tokens] +  [token] + [1 suffix token]
         token_rows = list(self.token_row_map[token])
         out = []
         while len(out) < n:
             row = random.choice(token_rows)
             row_tokens = self.dataset_tokenized[row]
-            token_idx = [index for index, value in enumerate(row_tokens) if value == token and index >= prefix_len]
+            # get index if it:
+            # 1. matches the token
+            # 2. there's at least prefix_len tokens before it
+            # 3. it's not the last token
+            token_idx = [index for index, value in enumerate(row_tokens)
+                         if value == token and index >= prefix_len and index != len(row_tokens)-1]
             if len(token_idx) > 0:
                 i = random.sample(token_idx, 1)[0]
-                out.append(row_tokens[i-prefix_len: i+1])
+                # gets a sample consisting of [prefix_len-1 tokens] +  [token] + [1 suffix token]
+                sample = row_tokens[i-prefix_len+1: i+2]
+                assert len(sample) == prefix_len
+                out.append(sample)
 
         return out
+    
+    def get_prefixes(self, token, prefix_len, n):
+        assert False, "get_prefixes is deprecated, use get_prefixes_plus_one instead"
 
     def top_n(self, n):
         top_tokens =  self.token_counts.most_common(n)

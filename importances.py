@@ -7,7 +7,7 @@ def get_mlps(model):
     return [layer.get_submodule("mlp") for layer in layers]
 
 def custom_loss(logits, labels, model):
-    """ Returns crossentropy loss per token, w/o reduction """
+    """ Returns crossentropy loss of second to last token, w/o reduction """
     # Shift so that tokens < n predict n
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
@@ -19,16 +19,18 @@ def custom_loss(logits, labels, model):
     # Enable model parallelism
     shift_labels = shift_labels.to(shift_logits.device)
     loss = loss_fct(shift_logits, shift_labels).view(orig_shape)
-    return loss
+    return loss[:, -1] # this is second to last since we shifted above
 
 def compute_acc_grad(model, examples, mlps):
     """ Computes squared gradient term in delta loss approximation.
     Then it stores it in the param.acc_grad attribute."""
     params = [list(mlp.parameters()) for mlp in mlps]
     params = itertools.chain.from_iterable(params) # flatten list
+    params = [param for param in params if param.requires_grad]
     res = model(examples, labels=examples)
     losses_tens = custom_loss(res.logits, examples, model)
     losses = [loss.mean() for loss in losses_tens]
+    assert len(losses) == examples.shape[0]
     # import pdb; pdb.set_trace()
     for example_loss in losses:
         example_loss.backward(retain_graph=True)
@@ -82,16 +84,17 @@ def get_input(storage, key):
 
 def get_sample_input_trailing_token(mlp_input_dict):
     """
-    Get single embedding(inputs into mlps) for each layer
-    for trailing token in sequence
+    Get single embedding(inputs into mlps) for each layer for second to last token
+    in sequence. We do this for the second to last because the last token has no loss.
     """
-    return [torch.mean(inputs[:, -1, :].cpu(), dim=0) for layer, inputs in mlp_input_dict.items()]
+    return [torch.mean(inputs[:, -2, :].cpu(), dim=0) for layer, inputs in mlp_input_dict.items()]
 
 def compute_delta_loss_importances(model, examples, idxs=None):
     """Computes and returns impotances of every hidden neuron in the model's
-    mlps. Here we define importance as the change of the loss if we were to
-    set the inbound and outbound weights of a neuron to 0."""
-    
+    mlps for the second to last token! of the examples. Here we define importance
+    as the change of the loss if we were to set the inbound and outbound weights of
+    a neuron to 0."""
+
     mlps = get_mlps(model)
     mlps = mlps if idxs is None else [mlps[i] for i in idxs]
 
@@ -99,10 +102,9 @@ def compute_delta_loss_importances(model, examples, idxs=None):
     hooks = []
     
     for i, mlp in enumerate(mlps):
-        fc1 = mlp.fc1
-        hook = fc1.register_forward_hook(get_input(mlp_input_dict, i))
+        hook = mlp.register_forward_hook(get_input(mlp_input_dict, i))
         hooks.append(hook)
-        
+    
     # compute and store first derivative squared
     loss = compute_acc_grad(model.cuda(), examples.cuda(), mlps)
     torch.cuda.synchronize()
@@ -115,11 +117,19 @@ def compute_delta_loss_importances(model, examples, idxs=None):
     # compute the importances.
     importances = compute_mlp_importance(mlps)
 
-    # cleanup
+    sample_inputs_trailing_token = get_sample_input_trailing_token(mlp_input_dict)
+
+    # =========================== Cleanup ===========================
     for hook in hooks:
         hook.remove()
-
-    sample_inputs_trailing_token = get_sample_input_trailing_token(mlp_input_dict)
+    
+    params = [list(mlp.parameters()) for mlp in mlps]
+    params = itertools.chain.from_iterable(params) # flatten list
+    params = [param for param in params if param.requires_grad]
+    model.zero_grad() # remove grad term
+    for param in params:
+        delattr(param, "acc_grad") # remove acc grad term
+    # ===============================================================
     
     return importances, sample_inputs_trailing_token
 
