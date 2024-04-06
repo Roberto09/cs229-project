@@ -283,6 +283,9 @@ class Experts(nn.Module):
         return dict_out
 
     def _get_init_router(self, layer, K, curr_token_idx_tracker, cluster_init_router, clusters_file, count_clusters):
+        if self.num_experts == 1:
+            print("using no router")
+            return None
         # Use cluster router
         if self.K is None:
             assert curr_token_idx_tracker is not None
@@ -333,7 +336,13 @@ class Experts(nn.Module):
             return exp_fc2(x=h1, x2=h2)
         else:
             return exp_fc2(self.activation_fn(exp_fc1(embs)))
- 
+
+    def forward_no_router(self, hidden_states):
+        assert self.num_experts == 1
+        exp_fc1 = self.experts_fc1[0]
+        exp_fc2 = self.experts_fc2[0]
+        return self.forward_expert(hidden_states, exp_fc1, exp_fc2)
+
     def forward_cluter_router(self, hidden_states):
         # token ids?
         expert_idxs = self.router(self.curr_token_idx_tracker[:hidden_states.shape[0], :hidden_states.shape[1]])
@@ -397,6 +406,9 @@ class Experts(nn.Module):
         return res2
 
     def forward(self, hidden_states):
+        # No Router
+        if self.router is None:
+            return self.forward_no_router(hidden_states)
         # Cluster Router
         if self.K is None:
             return self.forward_cluter_router(hidden_states)
