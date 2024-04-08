@@ -8,6 +8,7 @@ def prune_single_mlp(mlp, importances, prune_ratio):
     sorted_imps_idx = torch.argsort(importances)
     num_prune_cells = int(sorted_imps_idx.shape[0] * prune_ratio)
     keep_cells = sorted_imps_idx[num_prune_cells:]
+    prune_cells = sorted_imps_idx[:num_prune_cells]
     keep_cells = torch.sort(keep_cells).values # why sort and why call values() here?
 
     fc1 = mlp.fc1
@@ -30,15 +31,20 @@ def prune_single_mlp(mlp, importances, prune_ratio):
     
     mlp.fc1 = fc1_pruned
     mlp.fc2 = fc2_pruned
+    return prune_cells
 
 
 @torch.no_grad()
 def prune_mlps_individually(importances, prune_ratio):
     """ Given a dictionary of mlp -> importance tensor, prunes
     each mlp individually to the specified prune ratio.
+    Returns a list with the pruned away indexes of the cells.
     """
+    prune_cells = []
     for mlp, imp in importances.items():
-        prune_single_mlp(mlp, imp, prune_ratio)
+        mlp_prune_cells = prune_single_mlp(mlp, imp, prune_ratio)
+        prune_cells.append(mlp_prune_cells.numpy())
+    return prune_cells
 
 
 @torch.no_grad()
