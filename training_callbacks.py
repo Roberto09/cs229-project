@@ -52,3 +52,14 @@ class EnableMLPBias(TrainerCallback):
         for n, p in model.named_parameters():
             if "base_layer" in n and "bias" in n:
                 p.requires_grad = True
+
+class EarlyStopCallback(TrainerCallback):
+    # usage: callbacks = [AccEvalCallback(), EnableMLPBias(), EarlyStopCallback(210)]
+    def __init__(self, stop_steps):
+        super().__init__()
+        self._stop_steps = stop_steps
+        
+    def on_step_end(self, args, state, control, **kwargs):
+        if state.global_step == self._stop_steps:
+            control.should_training_stop = True
+        return control
