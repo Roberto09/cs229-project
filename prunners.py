@@ -47,8 +47,19 @@ def prune_mlps_individually(importances, prune_ratio):
     return prune_cells
 
 
+def get_r(prune_ratio):
+    gamma=prune_ratio
+    h = 8192
+    i = 2048
+    keep_cost = 4*(1-gamma)*h*i + 2*(1-gamma)*h + i
+    reg_cost = 4*0.5*h*i + 2*0.5*h + i
+
+    r = (reg_cost - keep_cost - (2*gamma*h + i)) / (4*(gamma*h + i))
+    return r
+
+
 @torch.no_grad()
-def prune_mlps_holistically(importances, prune_ratio):
+def prune_mlps_holistically(importances, prune_ratio, extra_prune_ratio):
     """ Given a dictionary of mlp -> importance tensor, prunes
     all the mlps holistically.
     """
@@ -66,12 +77,23 @@ def prune_mlps_holistically(importances, prune_ratio):
     # Make a new dict with indexes with smallest values zeroed out
     split_size = len(list(importances.values())[0])
 
-    pruned_tensors = torch.split(mask, split_size)
-    pruned_tensor_dict = {key: tensor for key, tensor in zip(importances.keys(), pruned_tensors)}
+    pruned_masks = torch.split(mask, split_size)
+    pruned_masks_dict = {key: tensor for key, tensor in zip(importances.keys(), pruned_masks)}
+
+    pruned_idx_list = []
+    r_list = []
 
     # Prune each mlp
-    for mlp, keep_idx in pruned_tensor_dict.items():
+    i = 0
+    for mlp, keep_idx in pruned_masks_dict.items():
         keep_idx = torch.arange(keep_idx.shape[0], dtype=torch.long)[keep_idx]
+        imps = list(importances.values()[i])[keep_idx]
+        i += 1
+        _, keep_idx = torch.topk(imps, len(keep_idx)*extra_prune_ratio, largest=True)
+        keep_idx = torch.arange(keep_idx.shape[0], dtype=torch.long)[keep_idx]
+        prune_idx = [j for j in torch.arange(len(list(importances.values()[i])))]
+        pruned_idx_list.append(prune_idx)
+        r_list.append(get_r(len(keep_idx) / 8192))
         fc1 = mlp.fc1
         dtype = fc1.weight.dtype
         fc1_pruned = torch.nn.Linear(
@@ -95,3 +117,6 @@ def prune_mlps_holistically(importances, prune_ratio):
 
         mlp.fc1 = fc1_pruned
         mlp.fc2 = fc2_pruned
+
+
+    return pruned_idx_list.numpy(), r_list
