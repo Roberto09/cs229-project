@@ -88,13 +88,17 @@ def prune_mlps_holistically(importances, prune_ratio, extra_prune_ratio):
     i = 0
     for mlp, mask in pruned_masks_dict.items():
         keep_idx = torch.arange(mask.shape[0], dtype=torch.long)[mask]
-        imps = list(importances.values())[i][keep_idx]
+        imps = list(importances.values())[i]
+        imps = imps.float()
         _, keep_idx = torch.topk(imps, int(len(keep_idx)*extra_prune_ratio), largest=True)
         # keep_idx = torch.arange(keep_idx.shape[0], dtype=torch.long)[keep_idx]
-        prune_idx = [j for j in torch.arange(len(list(importances.values())[i]))]
+        mask_prune = torch.ones_like(imps, dtype=torch.bool)
+        mask_prune[keep_idx] = False
+        prune_idx = torch.arange(len(list(importances.values())[i]))[mask_prune]
         i += 1
         pruned_idx_list.append(np.array(prune_idx, dtype=float))
-        r_list.append(get_r(len(keep_idx) / 8192))
+        r_list.append(get_r(len(prune_idx) / 8192))
+
         fc1 = mlp.fc1
         dtype = fc1.weight.dtype
         fc1_pruned = torch.nn.Linear(
