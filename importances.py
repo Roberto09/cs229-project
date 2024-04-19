@@ -19,6 +19,7 @@ def custom_loss(logits, labels, model):
     # Enable model parallelism
     shift_labels = shift_labels.to(shift_logits.device)
     loss = loss_fct(shift_logits, shift_labels).view(orig_shape)
+    # import pdb; pdb.set_trace()
     return loss[:, -1] # this is second to last since we shifted above
 
 def compute_acc_grad(model, examples, mlps):
@@ -29,6 +30,7 @@ def compute_acc_grad(model, examples, mlps):
     params = [param for param in params if param.requires_grad]
     res = model(examples, labels=examples)
     losses_tens = custom_loss(res.logits, examples, model)
+    # import pdb; pdb.set_trace()
     losses = [loss.mean() for loss in losses_tens]
     assert len(losses) == examples.shape[0]
     # import pdb; pdb.set_trace()
@@ -38,10 +40,12 @@ def compute_acc_grad(model, examples, mlps):
             num_examples = examples.shape[0]
             with torch.no_grad():
                 grad = param.grad.detach()
+                # why dividing by number of examples??
                 sq_grad = grad * grad / num_examples
                 if hasattr(param, "acc_grad"):
                     param.acc_grad += sq_grad
                 else:
+                    # copy.deepcopy???
                     param.acc_grad = sq_grad
         model.zero_grad()
         del example_loss
@@ -78,6 +82,7 @@ def get_input(storage, key):
     """
     def hook(module, input, output):
         # Assuming the layer takes a single Tensor as input, store it
+        assert key not in storage, "trying to override imput, this may be a bug"
         storage[key] = input[0].detach()
     return hook
 
@@ -87,7 +92,12 @@ def get_sample_input_trailing_token(mlp_input_dict):
     Get single embedding(inputs into mlps) for each layer for second to last token
     in sequence. We do this for the second to last because the last token has no loss.
     """
-    return [torch.mean(inputs[:, -2, :].cpu(), dim=0) for layer, inputs in mlp_input_dict.items()]
+    import pdb; pdb.set_trace()
+    res = []
+    for l in range(len(mlp_input_dict)):
+        x = mlp_input_dict[l][:, -2, :].cpu()
+        res.append(torch.mean(x, dim=0))
+    return res
 
 def compute_delta_loss_importances(model, examples, idxs=None):
     """Computes and returns impotances of every hidden neuron in the model's
