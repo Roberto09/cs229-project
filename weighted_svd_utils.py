@@ -155,3 +155,23 @@ def toy_seven_subspace_matrix(inp=80, out=100, r=6, noise=False):
         m += torch.randn(m.shape)*0.1
     #same_subspace_indices = [i for i in range(out//8)]
     return m#, same_subspace_indices
+
+def toy_seven_subspace_matrix_unqual_size(inp=250, out=896, r=4, noise=True):
+    """
+    Returns a toy matrix constructed by taking half of it's rows to live in an
+    r-dimensional subpace and the other half to be in another r2-dimensional subspace.
+    """
+    assert out%(16) == 0
+    unit = out // (16)
+    m1 = torch.randn(unit, r) @ torch.randn(r, inp)
+    m2 = torch.randn(unit, r) @ torch.randn(r, inp)
+    m3 = torch.randn(2*unit, r*2) @ torch.randn(r*2, inp)
+    m4 = torch.randn(2*unit, r*2) @ torch.randn(r*2, inp)
+    m5 = torch.randn(3*unit, r*3) @ torch.randn(r*3, inp)
+    m6 = torch.randn(3*unit, r*3) @ torch.randn(r*3, inp)
+    m7 = torch.randn(4*unit, r*4) @ torch.randn(r*4, inp)
+    m = torch.concat((m1, m2, m3, m4, m5, m6, m7))
+    if noise:
+        m += torch.randn(m.shape)*0.1
+    #same_subspace_indices = [i for i in range(out//8)]
+    return m#, same_subspace_indices
