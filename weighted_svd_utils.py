@@ -136,3 +136,22 @@ class WeightedSVD(nn.Module, object):
         self.S.data = self.S[perm]
         self.U.data = self.U[:, perm]
         self.V.data = self.V[:, perm]
+
+def toy_seven_subspace_matrix(inp=80, out=100, r=6, noise=False):
+    """
+    Returns a toy matrix constructed by taking half of it's rows to live in an
+    r-dimensional subpace and the other half to be in another r2-dimensional subspace.
+    """
+    assert out%7 == 0
+    m1 = torch.randn(out//7, r) @ torch.randn(r, inp)
+    m2 = torch.randn(out//7, r) @ torch.randn(r, inp)
+    m3 = torch.randn(out//7, r) @ torch.randn(r, inp)
+    m4 = torch.randn(out//7, r) @ torch.randn(r, inp)
+    m5 = torch.randn(out//7, r) @ torch.randn(r, inp)
+    m6 = torch.randn(out//7, r) @ torch.randn(r, inp)
+    m7 = torch.randn(out//7, r) @ torch.randn(r, inp)
+    m = torch.concat((m1, m2, m3, m4, m5, m6, m7))
+    if noise:
+        m += torch.randn(m.shape)*0.1
+    #same_subspace_indices = [i for i in range(out//8)]
+    return m#, same_subspace_indices
