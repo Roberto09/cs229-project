@@ -66,7 +66,7 @@ def toy_two_subspace_matrix(inp=80, out=100, r=32, r2=None, noise=False):
     same_subspace_indices = [i for i in range(out//2)]
     return m, same_subspace_indices
 
-def weighted_svd(M, W):
+def weighted_svd_inverse_weight(M, W):
     """
     Uses inverse-weight technique to come up with weighted SVD.
     M and W should be the same shape, M is the matrix, W are the weights
@@ -87,6 +87,11 @@ def weighted_svd(M, W):
     return U, S, V
 
 class WeightedSVD(nn.Module, object):
+    """
+    Computes weighted SVD given arbitrary weights using GD.
+    Send to CUDA for maximum efficiency:
+    w_svd = WeightedSVD(...).cuda()
+    """
     def __init__(self, M, W, rank):
         super().__init__()
         out, inp = M.shape
