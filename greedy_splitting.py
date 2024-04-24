@@ -65,36 +65,34 @@ def flops_from_svd(U, S, V):
 
 # TODO: More accurate flop calculation everywhere
 
-def find_optimal_rank_allocation_F2(mat1, mat2, flops):
-    mat1_flops = 2 * mat1.shape[0] * mat1.shape[1] if mat1 != None else 0.0
-    mat2_flops = 2 * mat2.shape[0] * mat2.shape[1] if mat2 != None else 0.0
-    u1, s1, v1 = get_svd(mat1) if mat1 != None else (None, None, None)
-    u2, s2, v2 = get_svd(mat2) if mat2 != None else (None, None, None)
+def find_optimal_rank_allocation_F2(mat1:SubMatrix, mat2:SubMatrix, flops:int):
+    mat1_flops = mat1.get_flops_full_matrix() if mat1.has_rows() else 0.0
+    mat2_flops = mat2.get_flops_full_matrix() if mat2.has_rows() else 0.0
+    u1, s1, v1 = get_svd(mat1.get_dense_torch_matrix()) if mat1 != None else (None, None, None)
+    u2, s2, v2 = get_svd(mat2.get_dense_torch_matrix()) if mat2 != None else (None, None, None)
     svd1_flops = flops_from_svd(u1, s1, v1)
     svd2_flops = flops_from_svd(u2, s2, v2)
-    if mat1 != None and mat1.shape[0] == 1:
+    if mat1.num_rows == 1:
         svd1_flops = mat1_flops
-    if mat2 != None and mat2.shape[0] == 1:
+    if mat2.num_rows == 1:
         svd2_flops = mat2_flops
 
-    flops_per_sv_1 = 2 * v1.shape[0] + 2 * u1.shape[0] if mat1 != None else 0.0
-    flops_per_sv_2 = 2 * v2.shape[0] + 2 * u2.shape[0] if mat2 != None else 0.0
+    flops_per_sv_1 = 2 * v1.shape[0] + 2 * u1.shape[0] if mat1.has_rows() else 0.0
+    flops_per_sv_2 = 2 * v2.shape[0] + 2 * u2.shape[0] if mat2.has_rows() else 0.0
 
-    #F2_loss_1 = torch.diag(s1) if mat1 != None else []
-    F2_loss_1 = [s*s for s in s1] if mat1 != None else [] 
-    #F2_loss_2 = torch.diag(s2) if mat2 != None else []
-    F2_loss_2 = [s*s for s in s2] if mat2 != None else []
+    F2_loss_1 = [s*s for s in s1] if mat1.has_rows() else [] 
+    F2_loss_2 = [s*s for s in s2] if mat2.has_rows() else []
 
-    r1 = s1.shape[0] if mat1 != None else 0
-    r2 = s2.shape[0] if mat2 != None else 0
+    r1 = s1.shape[0] if mat1.has_rows() else 0
+    r2 = s2.shape[0] if mat2.has_rows() else 0
 
     min_F2_loss = torch.inf
 
-    if (mat1 == None and mat2 == None):
+    if (not mat1.has_rows() and not mat2.has_rows()):
         print("Warning! Both matrices empty!")
 
     # Find the best split given that both matrices are SV-decomposed
-    if (mat1 != None and mat2 != None):
+    if (mat1.has_rows() and mat2.has_rows()):
         flops_both_svd = svd1_flops + svd2_flops
         F2_loss_both_svd = 0
         i1_both_svd = r1 - 1
@@ -119,7 +117,7 @@ def find_optimal_rank_allocation_F2(mat1, mat2, flops):
         flops2 = r2_optimal * flops_per_sv_2
 
     # Find the best split given that only mat1 is SV-decomposed
-    if mat1 != None:
+    if mat1.has_rows():
         flops_mat1_svd = svd1_flops + mat2_flops
         F2_loss_mat1_svd = 0
         i1_mat1_svd = r1 - 1
@@ -139,7 +137,7 @@ def find_optimal_rank_allocation_F2(mat1, mat2, flops):
             flops2 = mat2_flops
 
     # Find the best split given that only mat2 is SV-decomposed
-    if mat2 != None:
+    if mat2.has_rows():
         flops_mat2_svd = mat1_flops + svd2_flops
         F2_loss_mat2_svd = 0
         i2_mat2_svd = r2 - 1
@@ -160,11 +158,11 @@ def find_optimal_rank_allocation_F2(mat1, mat2, flops):
     return (min_F2_loss, r1_optimal, r2_optimal, flops1, flops2)
 
 def get_proj_loss_F2(matrix1:SubMatrix, matrix2:SubMatrix, flops:int):
-    torch_matrix1 = matrix1.get_dense_torch_matrix() if matrix1.has_rows() else None
-    torch_matrix2 = matrix2.get_dense_torch_matrix() if matrix2.has_rows() else None
-    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = find_optimal_rank_allocation_F2(torch_matrix1, torch_matrix2, flops)
+    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = find_optimal_rank_allocation_F2(matrix1, matrix2, flops)
 
     # Check if F2 loss from singular values matches actual F2 of the difference
+    torch_matrix1 = matrix1.get_dense_torch_matrix() if matrix1.has_rows() else None
+    torch_matrix2 = matrix2.get_dense_torch_matrix() if matrix2.has_rows() else None
     lora_1 = get_svd_lora(torch_matrix1, r1_optimal) if torch_matrix1 is not None else None
     lora_2 = get_svd_lora(torch_matrix2, r2_optimal) if torch_matrix2 is not None else None
     F_loss_1 = weighted_frobenious(torch_matrix1, lora_1) if torch_matrix1 is not None else 0.0
