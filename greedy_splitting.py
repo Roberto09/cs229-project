@@ -105,7 +105,6 @@ def find_optimal_rank_allocation_F2(mat1, mat2, flops):
             min_F2_loss = F2_loss_mat2_svd
             flops1 = mat1_flops
             flops2 = r2_optimal * flops_per_sv_2
-    print(r1_optimal, r2_optimal)
     return (min_F2_loss, r1_optimal, r2_optimal, flops1, flops2)
 
 def get_proj_loss_F2(group1, group2, flops):
@@ -235,3 +234,16 @@ def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
         ret_group = optimal_group1 if optimal_group1 else optimal_group2
         ret_group.sort(key=lambda x: x[0])
         return total_F2_loss, total_actual_flops, [ret_group]
+    
+def test():
+    torch.manual_seed(1234)
+    # torch.manual_seed(123) <- this will fail? 
+    A = torch.randn(50, 20)
+    A_rows = list(enumerate(A))
+    total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A_rows)
+    expected_loss = 288.4483
+    assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss}."
+
+
+if __name__ == "__main__":
+    test()
