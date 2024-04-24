@@ -5,10 +5,15 @@ from tqdm import tqdm
 import pandas as pd
 import numpy as np
 
-from weighted_svd_utils import weighted_frobenious, get_svd, rank_r, get_svd_lora, toy_correlated_matrix, toy_two_subspace_matrix, toy_seven_subspace_matrix, toy_seven_subspace_matrix_unqual_size
+from weighted_svd_utils import weighted_frobenious, get_svd, get_svd_lora
+
+def flops_from_shape(inp, out, rank):
+    return 2 * rank * (inp + out)
 
 def flops_from_svd(U, S, V):
-    ret = 2 * (V.shape[0] * V.shape[1] + U.shape[0] * U.shape[1]) if U != None and S != None and V != None else 0
+    if U is None or S is None or V is None: return 0
+    assert U.shape[1] == S.shape[0] == V.shape[1], "SVD had unexpected shape"
+    ret = flops_from_shape(inp=V.shape[0], out=U.shape[0], rank=S.shape[0])
     return ret
 
 # TODO: More accurate flop calculation everywhere
@@ -216,12 +221,14 @@ def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
         if r1_optimal > 1:
             F2_loss_1, flops1_actual, groups1 = greedy_splitting_rows_F2(optimal_group1, flops1, printdepth + 1)
         else:
-            F2_loss_1, flops1_actual, groups1 = 0.0, 2 * len((optimal_group1[0])[1]) + len(optimal_group1), optimal_group1
+            flops1_actual = flops_from_shape(inp=len(optimal_group1[0][1]), out=len(optimal_group1), rank=r1_optimal)
+            F2_loss_1, groups1 = 0.0, optimal_group1
         print(f"Splitting sub-matrix 2 of size {len(optimal_group2)} at depth = {printdepth} with {flops2} flops")
         if r2_optimal > 1:
             F2_loss_2, flops2_actual, groups2 = greedy_splitting_rows_F2(optimal_group2, flops2, printdepth + 1)
         else:
-            F2_loss_2, flops2_actual, groups2 = 0.0, 2 * len((optimal_group2[0])[1]) + len(optimal_group2), optimal_group2
+            flops2_actual = flops_from_shape(inp=len(optimal_group2[0][1]), out=len(optimal_group2), rank=r2_optimal)
+            F2_loss_2, groups2 = 0.0, optimal_group2
         total_F2_loss = F2_loss_1 + F2_loss_2
         total_actual_flops = flops1_actual + flops2_actual
         return total_F2_loss, total_actual_flops, groups1 + groups2
