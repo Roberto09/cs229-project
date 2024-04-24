@@ -204,20 +204,17 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
 
     print(f"Depth: {printdepth}")
     sender_idx = 1 # 1 means group1, 2 means group2
-    optimal_group1, optimal_group2 = orig_matrix.get_rows(), [] # all and no rows
+    optimal_matrix1, optimal_matrix2 = orig_matrix.copy(), SubMatrix(orig_matrix, []) # all and no rows
 
-    current_best_F2_loss, _, _, _, _ = get_proj_loss_F2(
-        SubMatrix(orig_matrix, [r[0] for r in optimal_group1]), SubMatrix(orig_matrix, [r[0] for r in optimal_group2]), flops)
+    current_best_F2_loss, _, _, _, _ = get_proj_loss_F2(optimal_matrix1, optimal_matrix2, flops)
     single_svd_F2_loss = current_best_F2_loss # For debugging, can remove later
     print(f"Loss from simple SVD: {single_svd_F2_loss}")
 
     while True:
-        current_best_F2_loss_for_direction, _, _, _, _ = get_proj_loss_F2(
-            SubMatrix(orig_matrix, [r[0] for r in optimal_group1]), SubMatrix(orig_matrix, [r[0] for r in optimal_group2]), flops)
-        optimal_group1_for_direction = list(optimal_group1)
-        optimal_group2_for_direction = list(optimal_group2)
-        groups = [SubMatrix(orig_matrix, rows=[r[0] for r in optimal_group1]),
-                  SubMatrix(orig_matrix, rows=[r[0] for r in optimal_group2])]
+        current_best_F2_loss_for_direction, _, _, _, _ = get_proj_loss_F2(optimal_matrix1, optimal_matrix2, flops)
+        optimal_matrix1_for_direction = optimal_matrix1.copy()
+        optimal_matrix2_for_direction = optimal_matrix2.copy()
+        groups = [optimal_matrix1.copy(), optimal_matrix2.copy()]
         sender = groups[sender_idx - 1]
         receiver = groups[-sender_idx]
         while sender.has_rows():
@@ -225,25 +222,22 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
             sender.remove_row(row_to_move[0])
             receiver.add_row(row_to_move[0])
             if F2_loss < current_best_F2_loss_for_direction:
-                optimal_group1_for_direction = groups[0].get_rows()
-                optimal_group2_for_direction = groups[1].get_rows()
+                optimal_matrix1_for_direction = groups[0].copy()
+                optimal_matrix2_for_direction = groups[1].copy()
                 current_best_F2_loss_for_direction = F2_loss
 
         print(f"Loss for direction: {current_best_F2_loss_for_direction}")
 
         if current_best_F2_loss_for_direction < current_best_F2_loss:
             current_best_F2_loss = current_best_F2_loss_for_direction
-            optimal_group1 = list(optimal_group1_for_direction)
-            optimal_group2 = list(optimal_group2_for_direction)
+            optimal_matrix1 = optimal_matrix1_for_direction.copy()
+            optimal_matrix2 = optimal_matrix2_for_direction.copy()
             sender_idx = 2 if sender_idx == 1 else 1
             continue
         else:
             print("Optimal split found. Proceeding to split sub-matrices.")
             break
     
-    optimal_matrix1 = SubMatrix(orig_matrix, [row[0] for row in optimal_group1]) 
-    optimal_matrix2 = SubMatrix(orig_matrix, [row[0] for row in optimal_group2])
-    optimal_group1, optimal_group2 = None, None # just to make sure we don't use them anymore
 
     F2_loss, r1_optimal, r2_optimal, flops1, flops2 = get_proj_loss_F2(optimal_matrix1, optimal_matrix2, flops)
     print(f"Size of group 1: {optimal_matrix1.num_rows}\nSize of group 2: {optimal_matrix2.num_rows}")
