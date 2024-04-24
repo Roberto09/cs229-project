@@ -50,6 +50,9 @@ class SubMatrix():
 
     def get_flops_full_matrix(self):
         return 2 * self.num_rows * self.num_cols
+    
+    def copy(self):
+        return copy.deepcopy(self)
 
 def flops_from_shape(inp, out, rank):
     return 2 * rank * (inp + out)
@@ -156,20 +159,16 @@ def find_optimal_rank_allocation_F2(mat1, mat2, flops):
             flops2 = r2_optimal * flops_per_sv_2
     return (min_F2_loss, r1_optimal, r2_optimal, flops1, flops2)
 
-def get_proj_loss_F2(group1, group2, flops):
-
-    mat1 = torch.stack([row for idx, row in group1]) if group1 else None
-    mat2 = torch.stack([row for idx, row in group2]) if group2 else None
-
-    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = find_optimal_rank_allocation_F2(mat1, mat2, flops)
+def get_proj_loss_F2(matrix1:SubMatrix, matrix2:SubMatrix, flops:int):
+    torch_matrix1 = matrix1.get_dense_torch_matrix() if matrix1.has_rows() else None
+    torch_matrix2 = matrix2.get_dense_torch_matrix() if matrix2.has_rows() else None
+    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = find_optimal_rank_allocation_F2(torch_matrix1, torch_matrix2, flops)
 
     # Check if F2 loss from singular values matches actual F2 of the difference
-    lora_1 = get_svd_lora(mat1, r1_optimal) if group1 else None
-    lora_2 = get_svd_lora(mat2, r2_optimal) if group2 else None
-    A_partial_1 = torch.stack([row for idx, row in group1]) if group1 else None
-    A_partial_2 = torch.stack([row for idx, row in group2]) if group2 else None
-    F_loss_1 = weighted_frobenious(A_partial_1, lora_1) if group1 else 0.0
-    F_loss_2 = weighted_frobenious(A_partial_2, lora_2) if group2 else 0.0
+    lora_1 = get_svd_lora(torch_matrix1, r1_optimal) if torch_matrix1 is not None else None
+    lora_2 = get_svd_lora(torch_matrix2, r2_optimal) if torch_matrix2 is not None else None
+    F_loss_1 = weighted_frobenious(torch_matrix1, lora_1) if torch_matrix1 is not None else 0.0
+    F_loss_2 = weighted_frobenious(torch_matrix2, lora_2) if torch_matrix2 is not None else 0.0
     F2_loss_actual = F_loss_1 * F_loss_1 + F_loss_2 * F_loss_2
 
     if torch.abs(F2_loss - F2_loss_actual) > 0.5 and abs(F2_loss/F2_loss_actual - 1) > 0.001:
@@ -177,22 +176,21 @@ def get_proj_loss_F2(group1, group2, flops):
 
     return F2_loss, r1_optimal, r2_optimal, flops1, flops2
 
-def optimal_row_to_move_F2(sender, receiver, flops):
+def optimal_row_to_move_F2(sender:SubMatrix, receiver:SubMatrix, flops:int):
     # current_best_F2_loss, _, _ = get_proj_loss_F2(A_tuple_full, sender, receiver, flops)
-    current_best_F2_loss = torch.inf
-    current_best_tuple = None
-    for tuple in sender:
-        s = list(sender)
-        r = list(receiver)
+    best_F2_loss = torch.inf
+    best_row = None
+    for row_i, row in sender.get_rows():
+        sender_copy = sender.copy()
+        receiver_copy = receiver.copy()
+        sender_copy.remove_row(row_i)
+        receiver_copy.add_row(row_i)
+        F2_loss, _, _, _, _ = get_proj_loss_F2(sender_copy, receiver_copy, flops)
+        if F2_loss < best_F2_loss:
+            best_F2_loss = F2_loss
+            best_row = (row_i, row)
 
-        r.append(tuple)
-        s.remove(tuple)
-        F2_loss, _, _, _, _ = get_proj_loss_F2(s, r, flops)
-        if F2_loss < current_best_F2_loss:
-            current_best_F2_loss = F2_loss
-            current_best_tuple = tuple
-
-    return current_best_tuple, current_best_F2_loss
+    return best_row, best_F2_loss
 
 def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
 
@@ -208,12 +206,14 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
     sender_idx = 1 # 1 means group1, 2 means group2
     optimal_group1, optimal_group2 = orig_matrix.get_rows(), [] # all and no rows
 
-    current_best_F2_loss, _, _, _, _ = get_proj_loss_F2(optimal_group1, optimal_group2, flops)
+    current_best_F2_loss, _, _, _, _ = get_proj_loss_F2(
+        SubMatrix(orig_matrix, [r[0] for r in optimal_group1]), SubMatrix(orig_matrix, [r[0] for r in optimal_group2]), flops)
     single_svd_F2_loss = current_best_F2_loss # For debugging, can remove later
     print(f"Loss from simple SVD: {single_svd_F2_loss}")
 
     while True:
-        current_best_F2_loss_for_direction, _, _, _, _ = get_proj_loss_F2(optimal_group1, optimal_group2, flops)
+        current_best_F2_loss_for_direction, _, _, _, _ = get_proj_loss_F2(
+            SubMatrix(orig_matrix, [r[0] for r in optimal_group1]), SubMatrix(orig_matrix, [r[0] for r in optimal_group2]), flops)
         optimal_group1_for_direction = list(optimal_group1)
         optimal_group2_for_direction = list(optimal_group2)
         groups = [SubMatrix(orig_matrix, rows=[r[0] for r in optimal_group1]),
@@ -221,7 +221,7 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
         sender = groups[sender_idx - 1]
         receiver = groups[-sender_idx]
         while sender.has_rows():
-            row_to_move, F2_loss = optimal_row_to_move_F2(sender.get_rows(), receiver.get_rows(), flops)
+            row_to_move, F2_loss = optimal_row_to_move_F2(sender, receiver, flops)
             sender.remove_row(row_to_move[0])
             receiver.add_row(row_to_move[0])
             if F2_loss < current_best_F2_loss_for_direction:
@@ -245,7 +245,7 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
     optimal_matrix2 = SubMatrix(orig_matrix, [row[0] for row in optimal_group2])
     optimal_group1, optimal_group2 = None, None # just to make sure we don't use them anymore
 
-    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = get_proj_loss_F2(optimal_matrix1.get_rows(), optimal_matrix2.get_rows(), flops)
+    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = get_proj_loss_F2(optimal_matrix1, optimal_matrix2, flops)
     print(f"Size of group 1: {optimal_matrix1.num_rows}\nSize of group 2: {optimal_matrix2.num_rows}")
     print(f"Rank of matrix 1: {r1_optimal}\nRank of matrix 2: {r2_optimal}")
 
