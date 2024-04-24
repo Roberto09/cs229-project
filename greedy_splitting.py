@@ -33,20 +33,20 @@ class SubMatrix():
         assert row in self.rows
         self.rows.remove(row)
 
+    def has_rows(self):
+        return self.num_rows != 0
+
     def get_rows(self):
         return [(row, self.orig_matrix[row]) for row in self.rows]
+    
+    def sort_rows(self):
+        self.rows.sort()
 
     def get_orig_torch_matrix(self):
         return self.orig_matrix.detach().clone()
 
     def get_dense_torch_matrix(self):
         return self.orig_matrix[self.rows].detach().clone()
-
-    def has_rows(self):
-        return self.num_rows != 0
-    
-    def sort_rows(self):
-        self.rows.sort()
 
     def get_flops_full_matrix(self):
         return 2 * self.num_rows * self.num_cols

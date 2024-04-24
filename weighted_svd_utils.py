@@ -26,6 +26,16 @@ def get_svd(W, use_cuda=False):
     svd = torch.svd(W)
     return svd.U, svd.S, svd.V
 
+def fit_to_svd_rowspace(V, M, use_cuda=False):
+    """
+    V is the orthogonal matrix from U S V^T.
+    M is a matrix with the set of n column vectors we want to approximate using V as a basis.
+    returns a matrix R with n column vectors, where the ith column vector is:
+        R_i = argmin_{r} || M_i - V@r ||_F
+    """
+    R = torch.linalg.solve(V.T @ V, V.T) @ M
+    return R
+    
 def rank_r(diag, r):
     new_diag = diag.clone()
     new_diag[r:] = 0
