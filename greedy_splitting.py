@@ -4,8 +4,45 @@ from torch import optim
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
+from typing import List, Optional
+import copy
 
 from weighted_svd_utils import weighted_frobenious, get_svd, get_svd_lora
+
+class SubMatrix():
+    def __init__(self, orig_matrix, rows : Optional[List[int]] = None):
+        self.orig_matrix = orig_matrix.detach().clone()
+        if rows is None: rows = list(range(len(orig_matrix)))
+        self.rows = copy.deepcopy(rows)
+
+    @property
+    def num_rows(self):
+        return len(self.rows)
+
+    @property
+    def num_cols(self):
+        assert self.has_rows()
+        return self.orig_matrix.shape[1]
+
+    def add_row(self, row:int):
+        assert row not in self.rows
+        self.rows.append(row)
+
+    def remove_row(self, row:int):
+        assert row in self.rows
+        self.rows.remove(row)
+
+    def get_rows(self):
+        return [(row, self.orig_matrix[row]) for row in self.rows]
+    
+    def get_torch_matrix(self):
+        return self.orig_matrix[self.rows].detach().clone()
+
+    def has_rows(self):
+        return self.num_rows != 0
+    
+    def sort_rows(self):
+        self.rows.sort()
 
 def flops_from_shape(inp, out, rank):
     return 2 * rank * (inp + out)
@@ -150,22 +187,20 @@ def optimal_row_to_move_F2(sender, receiver, flops):
 
     return current_best_tuple, current_best_F2_loss
 
-def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
+def greedy_splitting_rows_F2(matrix, flops=None, printdepth = 1):
 
     # Check if group is vector
-    if len(row_tuples) == 1:
+    if matrix.shape[0] == 1:
         print("Attempting to split a single vector. Returning vector with zero loss.")
-        return 0.0, 2 * len(row_tuples) * len((row_tuples[0])[1]), [row_tuples]
+        return 0.0, 2 * matrix.shape[0] * matrix.shape[1], [SubMatrix(matrix)]
 
     if flops == None:
-        A_flops = 2 * len(row_tuples) * len((row_tuples[0])[1])
+        A_flops = 2 * matrix.shape[0] * matrix.shape[1]
         flops = 0.5 * A_flops
 
     print(f"Depth: {printdepth}")
-
     sender_idx = 1 # 1 means group1, 2 means group2
-    optimal_group1 = list(row_tuples)
-    optimal_group2 = []
+    optimal_group1, optimal_group2 = SubMatrix(matrix).get_rows(), [] # all and no rows
 
     current_best_F2_loss, _, _, _, _ = get_proj_loss_F2(optimal_group1, optimal_group2, flops)
     single_svd_F2_loss = current_best_F2_loss # For debugging, can remove later
@@ -175,16 +210,16 @@ def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
         current_best_F2_loss_for_direction, _, _, _, _ = get_proj_loss_F2(optimal_group1, optimal_group2, flops)
         optimal_group1_for_direction = list(optimal_group1)
         optimal_group2_for_direction = list(optimal_group2)
-        groups = [list(optimal_group1), list(optimal_group2)]
+        groups = [SubMatrix(matrix, rows=[r[0] for r in optimal_group1]), SubMatrix(matrix, rows=[r[0] for r in optimal_group2])]
         sender = groups[sender_idx - 1]
         receiver = groups[-sender_idx]
-        while sender:
-            row_to_move, F2_loss = optimal_row_to_move_F2(sender, receiver, flops)
-            sender.remove(row_to_move)
-            receiver.append(row_to_move)
+        while sender.has_rows():
+            row_to_move, F2_loss = optimal_row_to_move_F2(sender.get_rows(), receiver.get_rows(), flops)
+            sender.remove_row(row_to_move[0])
+            receiver.add_row(row_to_move[0])
             if F2_loss < current_best_F2_loss_for_direction:
-                optimal_group1_for_direction = list(groups[0])
-                optimal_group2_for_direction = list(groups[1])
+                optimal_group1_for_direction = groups[0].get_rows()
+                optimal_group2_for_direction = groups[1].get_rows()
                 current_best_F2_loss_for_direction = F2_loss
 
         print(f"Loss for direction: {current_best_F2_loss_for_direction}")
@@ -199,11 +234,15 @@ def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
             print("Optimal split found. Proceeding to split sub-matrices.")
             break
 
-    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = get_proj_loss_F2(optimal_group1, optimal_group2, flops)
-    print(f"Size of group 1: {len(optimal_group1)}\nSize of group 2: {len(optimal_group2)}")
+    optimal_matrix1 = SubMatrix(matrix, [row[0] for row in optimal_group1]) 
+    optimal_matrix2 = SubMatrix(matrix, [row[0] for row in optimal_group2])
+    optimal_group1, optimal_group2 = None, None # just to make sure we don't use them anymore
+
+    F2_loss, r1_optimal, r2_optimal, flops1, flops2 = get_proj_loss_F2(optimal_matrix1.get_rows(), optimal_matrix2.get_rows(), flops)
+    print(f"Size of group 1: {optimal_matrix1.num_rows}\nSize of group 2: {optimal_matrix2.num_rows}")
     print(f"Rank of matrix 1: {r1_optimal}\nRank of matrix 2: {r2_optimal}")
 
-    if optimal_group1 and optimal_group2:
+    if optimal_matrix1.has_rows() and optimal_matrix2.has_rows():
         remainderflops = flops - flops1 - flops2 # TODO: Implement efficient usage of remainder flops in another branches
         if remainderflops < 0:
             print(f"Warning: Used more flops than allocated! {flops1} + {flops2} = {flops1 + flops2} vs {flops}")
@@ -215,20 +254,18 @@ def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
             flops1 += int(remainderflops * 0.5)
             flops2 += remainderflops - int(remainderflops * 0.5)
 
-        #mat1 = torch.stack([row for idx, row in optimal_group1])
-        #mat2 = torch.stack([row for idx, row in optimal_group2])
-        print(f"Splitting sub-matrix 1 of size {len(optimal_group1)} at depth = {printdepth} with {flops1} flops")
+        print(f"Splitting sub-matrix 1 of size {optimal_matrix1.num_rows} at depth = {printdepth} with {flops1} flops")
         if r1_optimal > 1:
-            F2_loss_1, flops1_actual, groups1 = greedy_splitting_rows_F2(optimal_group1, flops1, printdepth + 1)
+            F2_loss_1, flops1_actual, groups1 = greedy_splitting_rows_F2(optimal_matrix1.get_torch_matrix(), flops1, printdepth + 1)
         else:
-            flops1_actual = flops_from_shape(inp=len(optimal_group1[0][1]), out=len(optimal_group1), rank=r1_optimal)
-            F2_loss_1, groups1 = 0.0, optimal_group1
-        print(f"Splitting sub-matrix 2 of size {len(optimal_group2)} at depth = {printdepth} with {flops2} flops")
+            flops1_actual = flops_from_shape(inp=optimal_matrix1.num_cols, out=optimal_matrix1.num_cols, rank=r1_optimal)
+            F2_loss_1, groups1 = 0.0, [optimal_matrix1]
+        print(f"Splitting sub-matrix 2 of size {optimal_matrix2.num_rows} at depth = {printdepth} with {flops2} flops")
         if r2_optimal > 1:
-            F2_loss_2, flops2_actual, groups2 = greedy_splitting_rows_F2(optimal_group2, flops2, printdepth + 1)
+            F2_loss_2, flops2_actual, groups2 = greedy_splitting_rows_F2(optimal_matrix2.get_torch_matrix(), flops2, printdepth + 1)
         else:
-            flops2_actual = flops_from_shape(inp=len(optimal_group2[0][1]), out=len(optimal_group2), rank=r2_optimal)
-            F2_loss_2, groups2 = 0.0, optimal_group2
+            flops2_actual = flops_from_shape(inp=optimal_matrix2.num_cols, out=optimal_matrix2.num_rows, rank=r2_optimal)
+            F2_loss_2, groups2 = 0.0, [optimal_matrix2]
         total_F2_loss = F2_loss_1 + F2_loss_2
         total_actual_flops = flops1_actual + flops2_actual
         return total_F2_loss, total_actual_flops, groups1 + groups2
@@ -238,8 +275,8 @@ def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
         flops2_actual = flops2
         total_F2_loss = F2_loss
         total_actual_flops = flops1_actual + flops2_actual
-        ret_group = optimal_group1 if optimal_group1 else optimal_group2
-        ret_group.sort(key=lambda x: x[0])
+        ret_group = optimal_matrix1 if optimal_matrix1.has_rows() else optimal_matrix2
+        ret_group.sort_rows()
         return total_F2_loss, total_actual_flops, [ret_group]
     
 def test():
@@ -252,8 +289,7 @@ def test():
         torch.manual_seed(seed)
         # torch.manual_seed(123) <- this will fail? 
         A = torch.randn(50, 20)
-        A_rows = list(enumerate(A))
-        total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A_rows)
+        total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A)
         assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss} for seed {seed}"
         return total_F2_loss
     test_seed(1234, 288.4483)
