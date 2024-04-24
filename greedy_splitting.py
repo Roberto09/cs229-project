@@ -242,6 +242,11 @@ def test():
     A_rows = list(enumerate(A))
     total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A_rows)
     expected_loss = 288.4483
+    """
+    If your change was a no-op and this test fails, your change broke something.
+    If your change was an improvement, we probably expect an improement here too,
+    if so, double change the value of the expected_loss to whatever it should be now.
+    """
     assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss}."
 
 
