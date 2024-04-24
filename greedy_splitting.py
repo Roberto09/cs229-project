@@ -236,19 +236,23 @@ def greedy_splitting_rows_F2(row_tuples, flops=None, printdepth = 1):
         return total_F2_loss, total_actual_flops, [ret_group]
     
 def test():
-    torch.manual_seed(1234)
-    # torch.manual_seed(123) <- this will fail? 
-    A = torch.randn(50, 20)
-    A_rows = list(enumerate(A))
-    total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A_rows)
-    expected_loss = 288.4483
     """
     If your change was a no-op and this test fails, your change broke something.
     If your change was an improvement, we probably expect an improement here too,
     if so, double change the value of the expected_loss to whatever it should be now.
     """
-    assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss}."
-
+    def test_seed(seed, expected_loss):
+        torch.manual_seed(seed)
+        # torch.manual_seed(123) <- this will fail? 
+        A = torch.randn(50, 20)
+        A_rows = list(enumerate(A))
+        total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A_rows)
+        assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss} for seed {seed}"
+        return total_F2_loss
+    test_seed(1234, 288.4483)
+    test_seed(1235, 293.4544)
+    test_seed(1236, 283.0340)
+    test_seed(1237, 277.2634)
 
 if __name__ == "__main__":
     test()
