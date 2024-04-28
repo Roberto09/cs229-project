@@ -7,7 +7,7 @@ import numpy as np
 from typing import List, Optional
 import copy
 
-from weighted_svd_utils import weighted_frobenious, get_svd, get_svd_lora
+from weighted_svd_utils import weighted_frobenious, get_svd, get_svd_lora, toy_seven_subspace_matrix
 
 class SubMatrix():
     def __init__(self, orig_matrix, rows : Optional[List[int]] = None):
@@ -284,17 +284,17 @@ def test():
     If your change was an improvement, we probably expect an improement here too,
     if so, double change the value of the expected_loss to whatever it should be now.
     """
-    def test_seed(seed, expected_loss):
+    def test_seed(seed, expected_loss, matrix_generator=lambda: torch.randn(50, 20)):
         torch.manual_seed(seed)
         # torch.manual_seed(123) <- this will fail? 
-        A = SubMatrix(torch.randn(50, 20))
+        A = SubMatrix(matrix_generator())
         total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A)
         assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss} for seed {seed}"
         return total_F2_loss
     test_seed(1234, 288.4483)
     test_seed(1235, 293.4544)
-    test_seed(1236, 283.0340)
-    test_seed(1237, 277.2634)
+    test_seed(1237, 1103.3636, matrix_generator=lambda: toy_seven_subspace_matrix(20, 70))
+    test_seed(1238, 982.9646, matrix_generator=lambda: toy_seven_subspace_matrix(20, 70))
 
 if __name__ == "__main__":
     test()
