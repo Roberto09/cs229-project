@@ -16,15 +16,16 @@ def weighted_frobenious(W, AB, w=None):
         w = torch.ones_like(W)*w
     return torch.norm(torch.sqrt(w)*(W-AB))
 
-def get_svd(W, use_cuda=False):
+def get_svd(W, rank=None, use_cuda=False):
     """
     Returns SVD of W. If use_cuda, will force using cuda, which will be faster
     for big matrices.
     """
+    rank = min(W.shape) if rank is None else rank
     if use_cuda:
         W = W.detach().clone().cuda()
     svd = torch.svd(W)
-    return svd.U, svd.S, svd.V
+    return svd.U[:, :rank], svd.S[:rank], svd.V[:, :rank]
 
 def fit_to_svd_rowspace(V, M, use_cuda=False):
     """

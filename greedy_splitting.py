@@ -7,7 +7,7 @@ import numpy as np
 from typing import List, Optional
 import copy
 
-from weighted_svd_utils import weighted_frobenious, get_svd, get_svd_lora, toy_seven_subspace_matrix
+from weighted_svd_utils import weighted_frobenious, get_svd, get_svd_lora, toy_seven_subspace_matrix, fit_to_svd_rowspace
 
 class SubMatrix():
     def __init__(self, orig_matrix, rows : Optional[List[int]] = None):
@@ -37,6 +37,7 @@ class SubMatrix():
         return self.num_rows != 0
 
     def get_rows(self):
+        self.sort_rows() # always sort rows before using them!
         return [(row, self.orig_matrix[row]) for row in self.rows]
     
     def sort_rows(self):
@@ -57,6 +58,19 @@ class SubMatrix():
     def copy_remove_unused_rows(self):
         new_matrix = self.orig_matrix[self.rows]
         return SubMatrix(new_matrix)
+    
+    def get_svd(self, rank=None):
+        U, S, V = get_svd(self.get_dense_torch_matrix(), rank=rank)
+        return U, S, V
+    
+    def get_low_rank_complement_rows(self, rank=None):
+        """ Returns low rank of complement of rows
+        """
+        _, _, B = get_svd(self.get_dense_torch_matrix(), rank=rank)
+        complement_rows = [r for r in range(len(self.orig_matrix)) if r not in self.rows]
+        complement_matrix = self.orig_matrix[complement_rows]
+        A = fit_to_svd_rowspace(B, complement_matrix.T)
+        return A, B
     
 
 def flops_from_shape(inp, out, rank):
@@ -195,6 +209,36 @@ def optimal_rows_to_move_F2(sender:SubMatrix, receiver:SubMatrix, flops:int):
 
     return [best_row], best_F2_loss
 
+def optimal_k_rows_to_move_F2(sender:SubMatrix, receiver:SubMatrix, rank_sender:int, rank_receiver:int, flops:int, k:int=1, backoff:int=0.5):
+    def top_move_rows(complement_matrix_lora, orig_matrix_lora):
+        orig_matrix = sender.get_orig_torch_matrix()
+        f2_rows_complement = torch.norm(complement_matrix_lora - orig_matrix, dim=1)
+        f2_rows = torch.norm(orig_matrix_lora - orig_matrix, dim=1)
+        f2_diff = f2_rows_complement - f2_rows
+        return torch.argsort(f2_diff)
+    
+    cmplA, cmplB = receiver.get_low_rank_complement_rows(rank=rank_receiver)
+    complement_matrix_lora_receiver = cmplA @ cmplB
+    U, S, V = sender.get_svd(rank=rank_sender)
+    orig_matrix_lora = (U*S) @ V.T
+    top_rows = top_move_rows(complement_matrix_lora_receiver, orig_matrix_lora)
+
+    best_proj_loss = get_proj_loss_F2(sender, receiver, flops)
+    curr_proj_loss = None
+    while k >= 1:
+        sender_copy = sender.copy()
+        receiver_copy = receiver.copy()
+        curr_top_rows = top_rows[:k].tolist()
+        for r in curr_top_rows: sender_copy.remove_row(r)
+        for r in curr_top_rows: receiver_copy.remove_row(r)
+        curr_proj_loss = get_proj_loss_F2(sender_copy, receiver_copy)
+        if curr_proj_loss < best_proj_loss:
+            return curr_top_rows, curr_proj_loss
+        k = int(k*backoff)
+    # worst case k = 1
+    return curr_top_rows, curr_proj_loss
+
+
 def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
 
     # Check if group is vector
@@ -221,6 +265,7 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
         sender = groups[sender_idx - 1]
         receiver = groups[-sender_idx]
         while sender.has_rows():
+            rows_to_move, F2_loss = optimal_rows_to_move_F2(sender, receiver, flops)
             rows_to_move, F2_loss = optimal_rows_to_move_F2(sender, receiver, flops)
             for row in rows_to_move: sender.remove_row(row[0])
             for row in rows_to_move: receiver.add_row(row[0])
