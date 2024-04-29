@@ -14,40 +14,45 @@ class SubMatrix():
         if type(orig_matrix) == SubMatrix: orig_matrix = orig_matrix.get_orig_torch_matrix()
         self.orig_matrix = orig_matrix.detach().clone()
         if rows is None: rows = list(range(len(orig_matrix)))
-        self.rows = copy.deepcopy(rows)
+        self._rows = copy.deepcopy(rows)
 
     @property
     def num_rows(self):
-        return len(self.rows)
+        return len(self._rows)
 
     @property
     def num_cols(self):
         assert self.has_rows()
         return self.orig_matrix.shape[1]
 
-    def add_row(self, row:int):
-        assert row not in self.rows
-        self.rows.append(row)
+    def add_rows(self, rows:int | List[int]):
+        if type(rows) == int: rows = [rows]
+        for row in rows:
+            assert row not in self._rows
+            self._rows.append(row)
 
-    def remove_row(self, row:int):
-        assert row in self.rows
-        self.rows.remove(row)
+    def remove_rows(self, rows:int | List[int]):
+        if type(rows) == int: rows = [rows]
+        for row in rows:
+            assert row in self._rows
+            self._rows.remove(row)
 
     def has_rows(self):
         return self.num_rows != 0
 
     def get_rows(self):
         self.sort_rows() # always sort rows before using them!
-        return [(row, self.orig_matrix[row]) for row in self.rows]
+        return [(row, self.orig_matrix[row]) for row in self._rows]
     
     def sort_rows(self):
-        self.rows.sort()
+        self._rows.sort()
 
     def get_orig_torch_matrix(self):
         return self.orig_matrix.detach().clone()
 
     def get_dense_torch_matrix(self):
-        return self.orig_matrix[self.rows].detach().clone()
+        rows = [r for r, _ in self.get_rows()]
+        return self.orig_matrix[rows].detach().clone()
 
     def get_flops_full_matrix(self):
         return 2 * self.num_rows * self.num_cols
@@ -56,7 +61,8 @@ class SubMatrix():
         return copy.deepcopy(self)
     
     def copy_remove_unused_rows(self):
-        new_matrix = self.orig_matrix[self.rows]
+        rows = [r for r, _ in self.get_rows()]
+        new_matrix = self.orig_matrix[rows]
         return SubMatrix(new_matrix)
     
     def get_svd(self, rank=None):
@@ -66,12 +72,11 @@ class SubMatrix():
     def get_low_rank_complement_rows(self, rank=None):
         """ Returns low rank of complement of rows
         """
-        _, _, B = get_svd(self.get_dense_torch_matrix(), rank=rank)
-        complement_rows = [r for r in range(len(self.orig_matrix)) if r not in self.rows]
+        _, _, B = self.get_svd(rank=rank)
+        complement_rows = [r for r in range(len(self.orig_matrix)) if r not in self._rows]
         complement_matrix = self.orig_matrix[complement_rows]
-        A = fit_to_svd_rowspace(B, complement_matrix.T)
+        A = fit_to_svd_rowspace(B, complement_matrix.T).T
         return A, B
-    
 
 def flops_from_shape(inp, out, rank):
     return 2 * rank * (inp + out)
@@ -193,54 +198,82 @@ def get_proj_loss_F2(matrix1:SubMatrix, matrix2:SubMatrix, flops:int):
 
     return F2_loss, r1_optimal, r2_optimal, flops1, flops2
 
-def optimal_rows_to_move_F2(sender:SubMatrix, receiver:SubMatrix, flops:int):
+def optimal_rows_to_move_F2(sender:SubMatrix, receiver:SubMatrix, flops:int, try_rows=None):
     # current_best_F2_loss, _, _ = get_proj_loss_F2(A_tuple_full, sender, receiver, flops)
     best_F2_loss = torch.inf
     best_row = None
-    for row_i, row in sender.get_rows():
+    if try_rows is None: try_rows = [r for r, _ in sender.get_rows()]
+    for row_i in try_rows:
         sender_copy = sender.copy()
         receiver_copy = receiver.copy()
-        sender_copy.remove_row(row_i)
-        receiver_copy.add_row(row_i)
+        sender_copy.remove_rows(row_i)
+        receiver_copy.add_rows(row_i)
         F2_loss, _, _, _, _ = get_proj_loss_F2(sender_copy, receiver_copy, flops)
         if F2_loss < best_F2_loss:
             best_F2_loss = F2_loss
-            best_row = (row_i, row)
+            best_row = row_i
 
     return [best_row], best_F2_loss
 
-def optimal_k_rows_to_move_F2(sender:SubMatrix, receiver:SubMatrix, rank_sender:int, rank_receiver:int, flops:int, k:int=1, backoff:int=0.5):
+def optimal_k_rows_to_move_F2(sender:SubMatrix, receiver:SubMatrix, flops:int, k:int=1, backoff:int=0.5):
+    # If k is None, we default to checking all rows
+    if k is None:
+        return *optimal_rows_to_move_F2(sender, receiver, flops), None
+    # TODO(roberto): figure out how to better handle empty receiver case
+    TOP_K = 1000000 # replicate original behavior
+    if not receiver.has_rows():
+        # Pick 20 rows arbitrarily and choose the best performing one
+        rand_rows_idxs = torch.randperm(sender.num_rows)[:TOP_K].tolist()
+        all_rows = sender.get_rows()
+        try_rows = [all_rows[i][0] for i in rand_rows_idxs]
+        curr_top_rows, curr_proj_loss = optimal_rows_to_move_F2(sender, receiver, flops, try_rows=try_rows)
+        return curr_top_rows, curr_proj_loss, k
+
+    # TODO(roberto): optimize case when k = 1
+    k = max(min(sender.num_rows//4, k),1)
     def top_move_rows(complement_matrix_lora, orig_matrix_lora):
-        orig_matrix = sender.get_orig_torch_matrix()
-        f2_rows_complement = torch.norm(complement_matrix_lora - orig_matrix, dim=1)
-        f2_rows = torch.norm(orig_matrix_lora - orig_matrix, dim=1)
-        f2_diff = f2_rows_complement - f2_rows
-        return torch.argsort(f2_diff)
+        orig_matrix = sender.get_dense_torch_matrix()
+        f2_rows_complement_loss = torch.norm(complement_matrix_lora - orig_matrix, dim=1)
+        f2_rows_loss = torch.norm(orig_matrix_lora - orig_matrix, dim=1)
+        f2_diff = f2_rows_complement_loss - f2_rows_loss
+        
+        sender_row_idxs = [r for r, _ in sender.get_rows()]
+        sorted_raw_indxs = torch.argsort(f2_diff)
+        return [sender_row_idxs[i] for i in sorted_raw_indxs]
+
+    best_proj_loss, rank_sender, rank_receiver, _, _ = get_proj_loss_F2(sender, receiver, flops)
     
-    cmplA, cmplB = receiver.get_low_rank_complement_rows(rank=rank_receiver)
-    complement_matrix_lora_receiver = cmplA @ cmplB
+    # cmplA, cmplB = receiver.get_low_rank_complement_rows(rank=rank_receiver)
+    cmplA, cmplB = receiver.get_low_rank_complement_rows(rank=rank_sender)
+    complement_matrix_lora_receiver = cmplA @ cmplB.T
     U, S, V = sender.get_svd(rank=rank_sender)
     orig_matrix_lora = (U*S) @ V.T
     top_rows = top_move_rows(complement_matrix_lora_receiver, orig_matrix_lora)
 
-    best_proj_loss = get_proj_loss_F2(sender, receiver, flops)
-    curr_proj_loss = None
-    while k >= 1:
+    curr_proj_loss, curr_top_rows = None, None
+    while k > 1:
         sender_copy = sender.copy()
         receiver_copy = receiver.copy()
-        curr_top_rows = top_rows[:k].tolist()
-        for r in curr_top_rows: sender_copy.remove_row(r)
-        for r in curr_top_rows: receiver_copy.remove_row(r)
-        curr_proj_loss = get_proj_loss_F2(sender_copy, receiver_copy)
+        curr_top_rows = top_rows[:k]
+        sender_copy.remove_rows(curr_top_rows)
+        receiver_copy.add_rows(curr_top_rows)
+        curr_proj_loss, _, _, _, _ = get_proj_loss_F2(sender_copy, receiver_copy, flops)
         if curr_proj_loss < best_proj_loss:
-            return curr_top_rows, curr_proj_loss
-        k = int(k*backoff)
-    # worst case k = 1
-    return curr_top_rows, curr_proj_loss
+            return curr_top_rows, curr_proj_loss, k
+        k = max(int(k*backoff), 1)
+    if k == 1:
+        curr_top_rows, curr_proj_loss = optimal_rows_to_move_F2(sender, receiver, flops, top_rows[:TOP_K])
+    assert curr_top_rows is not None and curr_proj_loss is not None
+    return curr_top_rows, curr_proj_loss, k
 
-
-def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
-
+@torch.no_grad()
+def greedy_splitting_rows_F2(
+    orig_matrix:SubMatrix,
+    flops=None,
+    printdepth = 1,
+    k=None, # K is none -> check all rows
+    backoff=0.5,
+):
     # Check if group is vector
     if orig_matrix.num_rows == 1:
         print("Attempting to split a single vector. Returning vector with zero loss.")
@@ -257,6 +290,7 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
     single_svd_F2_loss = current_best_F2_loss # For debugging, can remove later
     print(f"Loss from simple SVD: {single_svd_F2_loss}")
 
+    current_k = k
     while True:
         current_best_F2_loss_for_direction, _, _, _, _ = get_proj_loss_F2(optimal_matrix1, optimal_matrix2, flops)
         optimal_matrix1_for_direction = optimal_matrix1.copy()
@@ -265,10 +299,9 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
         sender = groups[sender_idx - 1]
         receiver = groups[-sender_idx]
         while sender.has_rows():
-            rows_to_move, F2_loss = optimal_rows_to_move_F2(sender, receiver, flops)
-            rows_to_move, F2_loss = optimal_rows_to_move_F2(sender, receiver, flops)
-            for row in rows_to_move: sender.remove_row(row[0])
-            for row in rows_to_move: receiver.add_row(row[0])
+            rows_to_move, F2_loss, current_k = optimal_k_rows_to_move_F2(sender, receiver, flops, k=current_k, backoff=backoff)
+            sender.remove_rows(rows_to_move)
+            receiver.add_rows(rows_to_move)
             if F2_loss < current_best_F2_loss_for_direction:
                 optimal_matrix1_for_direction = groups[0].copy()
                 optimal_matrix2_for_direction = groups[1].copy()
@@ -327,20 +360,21 @@ def greedy_splitting_rows_F2(orig_matrix:SubMatrix, flops=None, printdepth = 1):
         ret_group = optimal_matrix1 if optimal_matrix1.has_rows() else optimal_matrix2
         ret_group.sort_rows()
         return total_F2_loss, total_actual_flops, [ret_group]
-    
+
+def test_seed(seed, expected_loss, matrix_generator=lambda: torch.randn(50, 20)):
+    torch.manual_seed(seed)
+    # torch.manual_seed(123) <- this will fail? 
+    A = SubMatrix(matrix_generator())
+    total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A)
+    assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss} for seed {seed}"
+    return total_F2_loss
+
 def test():
     """
     If your change was a no-op and this test fails, your change broke something.
     If your change was an improvement, we probably expect an improement here too,
     if so, double change the value of the expected_loss to whatever it should be now.
     """
-    def test_seed(seed, expected_loss, matrix_generator=lambda: torch.randn(50, 20)):
-        torch.manual_seed(seed)
-        # torch.manual_seed(123) <- this will fail? 
-        A = SubMatrix(matrix_generator())
-        total_F2_loss, total_actual_flops, groups = greedy_splitting_rows_F2(A)
-        assert (total_F2_loss - expected_loss).abs() <= 1e-3, f"Expected {expected_loss} loss, but instead got: {total_F2_loss} for seed {seed}"
-        return total_F2_loss
     test_seed(1234, 288.4483)
     test_seed(1235, 293.4544)
     test_seed(1237, 1103.3636, matrix_generator=lambda: toy_seven_subspace_matrix(20, 70))
