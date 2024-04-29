@@ -22,12 +22,12 @@ def get_svd(W, rank=None, use_cuda=False):
     for big matrices.
     """
     rank = min(W.shape) if rank is None else rank
-    if use_cuda:
-        W = W.detach().clone().cuda()
+    # W = W.detach().clone()
+    if use_cuda: W = W.cuda()
     svd = torch.svd(W)
     return svd.U[:, :rank], svd.S[:rank], svd.V[:, :rank]
 
-def fit_to_svd_rowspace(V, M, use_cuda=False):
+def fit_to_svd_rowspace(V, M):
     """
     V is the orthogonal matrix from U S V^T.
     M is a matrix with the set of n column vectors we want to approximate using V as a basis.
@@ -42,11 +42,11 @@ def rank_r(diag, r):
     new_diag[r:] = 0
     return torch.diag(new_diag)
 
-def get_svd_lora(M, r):
+def get_svd_lora(M, r, use_cuda=False):
     """
     Returns SVD of rank r
     """
-    u, s, v = get_svd(M)
+    u, s, v = get_svd(M, use_cuda=use_cuda)
     return u@rank_r(s, r)@v.T
 
 def toy_correlated_matrix(inp=80, out=100):

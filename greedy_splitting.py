@@ -12,9 +12,11 @@ from weighted_svd_utils import weighted_frobenious, get_svd, get_svd_lora, toy_s
 class SubMatrix():
     def __init__(self, orig_matrix, rows : Optional[List[int]] = None):
         if type(orig_matrix) == SubMatrix: orig_matrix = orig_matrix.get_orig_torch_matrix()
-        self.orig_matrix = orig_matrix.detach().clone()
+        self.orig_matrix = orig_matrix #.detach().clone()
+        
         if rows is None: rows = list(range(len(orig_matrix)))
         self._rows = copy.deepcopy(rows)
+        self.sort_rows()
 
     @property
     def num_rows(self):
@@ -48,17 +50,18 @@ class SubMatrix():
         self._rows.sort()
 
     def get_orig_torch_matrix(self):
-        return self.orig_matrix.detach().clone()
+        return self.orig_matrix #.detach().clone()
 
     def get_dense_torch_matrix(self):
         rows = [r for r, _ in self.get_rows()]
-        return self.orig_matrix[rows].detach().clone()
+        return self.orig_matrix[rows] #.detach().clone()
 
     def get_flops_full_matrix(self):
         return 2 * self.num_rows * self.num_cols
     
     def copy(self):
-        return copy.deepcopy(self)
+        # return copy.deepcopy(self)
+        return SubMatrix(self.orig_matrix, rows=self._rows)
     
     def copy_remove_unused_rows(self):
         rows = [r for r, _ in self.get_rows()]
